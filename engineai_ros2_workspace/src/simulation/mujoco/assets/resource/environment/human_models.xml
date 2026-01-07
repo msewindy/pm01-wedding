@@ -1,0 +1,42 @@
+<mujoco model="human_models">
+    <!-- 
+    真实人脸照片平面
+    使用 mesh 几何体确保纹理完整显示
+    -->
+
+    <asset>
+        <!-- 平面 mesh (带纹理坐标) -->
+        <mesh name="photo_plane_mesh" 
+              file="photo_plane.obj"/>
+        
+        <!-- 多人脸照片纹理 -->
+        <texture name="multi_people_tex" type="2d" 
+                 file="AA1BBAcX.png"/>
+        <material name="multi_people_mat" 
+                  texture="multi_people_tex" 
+                  emission="1.0" 
+                  specular="0.0" 
+                  shininess="0.0"/>
+    </asset>
+
+    <worldbody>
+        <!-- 
+        照片平面（可通过 ROS2 移动）
+        mesh 尺寸 1.8m x 1.2m，面向 X 负方向
+        初始位置: 机器人前方 1.5m，高度 1.5m（更近以增大人脸像素）
+        
+        使用 mocap body 允许外部控制位置
+        mocap="true" 使其可以通过 data.mocap_pos 控制
+        -->
+        <body name="photo_panel" pos="80.0 0 1.5" mocap="true">
+            <geom name="photo_geom" 
+                  type="mesh" 
+                  mesh="photo_plane_mesh"
+                  material="multi_people_mat"
+                  contype="0" 
+                  conaffinity="0"/>
+        </body>
+
+    </worldbody>
+
+</mujoco>

@@ -1,0 +1,17 @@
+<mujoco model="global_model_with_humans">
+    <!-- 
+    带有人体模型的完整仿真场景
+    用于测试人脸检测算法
+    -->
+    
+    <!-- 机器人模型 -->
+    <include file="robot/pm_v2/xml/serial_pm_v2.xml"/>
+    
+    <!-- 地面环境 -->
+    <include file="environment/ground.xml"/>
+    
+    <!-- 人体模型 - 用于人脸检测测试 -->
+    <include file="environment/human_models.xml"/>
+    
+</mujoco>
+

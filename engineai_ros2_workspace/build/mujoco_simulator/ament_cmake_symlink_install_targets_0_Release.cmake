@@ -1,0 +1,1 @@
+ament_cmake_symlink_install_targets("TARGET_FILES" "/home/lingjing/project/engine_ai/engineai_ros2_workspace/build/mujoco_simulator/mujoco_simulator" "TARGETS" "mujoco_simulator" "DESTINATION" "lib/mujoco_simulator")

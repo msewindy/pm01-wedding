@@ -1,0 +1,57 @@
+# Wedding FSM Configuration
+# 婚礼互动 FSM 配置
+# ROS2 参数文件格式
+
+wedding_fsm_node:
+  ros__parameters:
+    # FSM 运行频率 (Hz)
+    # 注意：应匹配或低于图像采集频率（30Hz）以避免PID控制发散
+    # 建议值：25-30Hz，确保反馈数据及时更新
+    fsm_rate: 25.0
+    
+    # 状态发布频率 (Hz)
+    state_pub_rate: 5.0
+    
+    # IDLE 状态参数
+    idle_sway_amplitude: 0.035
+    idle_sway_period: 2.5
+    idle_face_confirm_time: 0.3
+    
+    # TRACKING 状态参数
+    tracking_follow_smooth: 0.3
+    tracking_greeting_cooldown: 30.0
+    tracking_lost_timeout: 1.5
+    tracking_gesture_confirm_time: 0.3
+    
+    # PHOTO_POSING 状态参数
+    photo_confirm_duration: 1.0
+    photo_pose_duration: 1.5
+    photo_countdown_duration: 3.0
+    photo_shutter_duration: 0.5
+    photo_done_duration: 2.0
+    
+    # FAREWELL 状态参数
+    farewell_duration: 2.5
+    
+    # SAFE_STOP 状态参数
+    safe_stop_recovery_wait_time: 2.0
+    
+    # 安全参数
+    safety_min_distance: 0.5
+    safety_max_distance: 5.0
+
+motion_adapter_node:
+  ros__parameters:
+    # 控制频率 (Hz)
+    control_rate: 50.0
+    
+    # 平滑系数
+    smooth_factor: 0.1
+    
+    # 腰部 PD 参数
+    waist_kp: 60.0
+    waist_kd: 1.5
+    
+    # 头部 PD 参数
+    head_kp: 60.0
+    head_kd: 1.5

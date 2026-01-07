@@ -1,0 +1,6 @@
+source;share/wedding_interaction/hook/pythonpath.ps1
+source;share/wedding_interaction/hook/pythonpath.dsv
+source;share/wedding_interaction/hook/pythonpath.sh
+source;share/wedding_interaction/hook/ament_prefix_path.ps1
+source;share/wedding_interaction/hook/ament_prefix_path.dsv
+source;share/wedding_interaction/hook/ament_prefix_path.sh

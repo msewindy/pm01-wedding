@@ -1,0 +1,18 @@
+{
+  "package_name": "interface_protocol",
+  "non_idl_tuples": [
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/BodyVelCmd.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/GamepadKeys.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/Heartbeat.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/ImuInfo.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/JointCommand.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/JointState.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/MotionState.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/MotorCommand.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/MotorDebug.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/MotorState.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/ParallelParserType.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:msg/Tts.msg",
+    "/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/interface_protocol:srv/EnableMotor.srv"
+  ]
+}

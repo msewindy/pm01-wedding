@@ -1,0 +1,26 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from interface_protocol/msg/Tts.msg
+// generated code does not contain a copyright notice
+
+
+module interface_protocol {
+  module msg {
+    @verbatim (language="comment", text=
+      "Must, Speech content")
+    struct Tts {
+      string text;
+
+      @verbatim (language="comment", text=
+        "Optional, Default: en")
+      string language;
+
+      @verbatim (language="comment", text=
+        "Optional, Default: default")
+      string speaker;
+
+      @verbatim (language="comment", text=
+        "Optional, Default: 150")
+      int64 rate;
+    };
+  };
+};

@@ -1,0 +1,17 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from interface_protocol/srv/EnableMotor.srv
+// generated code does not contain a copyright notice
+
+
+module interface_protocol {
+  module srv {
+    struct EnableMotor_Request {
+      boolean enable;
+    };
+    struct EnableMotor_Response {
+      boolean success;
+
+      string message;
+    };
+  };
+};
