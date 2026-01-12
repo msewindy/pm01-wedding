@@ -1,8 +1,0 @@
-[console_scripts]
-fsm_test = wedding_interaction.nodes.fsm_test_node:main
-motion_adapter = wedding_interaction.nodes.motion_adapter_node:main
-perception_node = wedding_interaction.nodes.perception_node:main
-perception_visualizer = wedding_interaction.nodes.perception_visualizer_node:main
-speech_player = wedding_interaction.nodes.speech_player_node:main
-wedding_fsm_node = wedding_interaction.nodes.wedding_fsm_node:main
-

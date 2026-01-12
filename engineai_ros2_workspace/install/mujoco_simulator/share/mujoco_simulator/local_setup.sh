@@ -1,1 +1,0 @@
-/home/lingjing/project/engine_ai/engineai_ros2_workspace/build/mujoco_simulator/ament_cmake_environment_hooks/local_setup.sh

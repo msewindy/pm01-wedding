@@ -40,20 +40,20 @@ def generate_launch_description():
     
     
     # 语音播放节点
-    speech_player_node = Node(
-        package='wedding_interaction',
-        executable='speech_player',
-        name='speech_player_node',
-        output='screen',
-        parameters=[
-            # 音频目录：使用项目源码目录下的 audio_resources
-            # 开发环境下使用源码路径，部署时修改为实际路径
-            {'audio_dir': '/home/lingjing/project/engine_ai/wedding_jeston/audio_resources'},
-            {'tts_enabled': True},
-            {'tts_engine': 'mock'},  # 仿真模式使用 mock，真机改为 piper
-        ],
-        emulate_tty=True,
-    )
+    # speech_player_node = Node(
+    #     package='wedding_interaction',
+    #     executable='speech_player',
+    #     name='speech_player_node',
+    #     output='screen',
+    #     parameters=[
+    #         # 音频目录：使用项目源码目录下的 audio_resources
+    #         # 开发环境下使用源码路径，部署时修改为实际路径
+    #         {'audio_dir': '/home/lingjing/project/engine_ai/wedding_jeston/audio_resources'},
+    #         {'tts_enabled': True},
+    #         {'tts_engine': 'mock'},  # 仿真模式使用 mock，真机改为 piper
+    #     ],
+    #     emulate_tty=True,
+    # )
     
     return LaunchDescription([
         fsm_rate_arg,

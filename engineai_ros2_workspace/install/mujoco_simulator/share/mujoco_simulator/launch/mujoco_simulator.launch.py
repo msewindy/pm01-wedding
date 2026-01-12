@@ -1,1 +1,0 @@
-/home/lingjing/project/engine_ai/engineai_ros2_workspace/src/simulation/mujoco/launch/mujoco_simulator.launch.py

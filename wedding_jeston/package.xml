@@ -13,6 +13,8 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
 
   <!-- 仿真环境依赖 -->
   <exec_depend>interface_protocol</exec_depend>
