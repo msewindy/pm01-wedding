@@ -50,6 +50,7 @@ class PerceptionNode(Node):
         self.declare_parameter('detection_rate', 30.0)
         self.declare_parameter('use_face_mesh', True)
         self.declare_parameter('model_selection', 0)  # 0: 近距离, 1: 远距离
+        self.declare_parameter('force_opencv', False)  # False: 使用 MediaPipe (如果可用), True: 强制使用 OpenCV
         
         self._use_usb_camera = self.get_parameter('use_usb_camera').value
         self._usb_camera_id = self.get_parameter('usb_camera_id').value
@@ -57,11 +58,13 @@ class PerceptionNode(Node):
         self._detection_rate = self.get_parameter('detection_rate').value
         self._use_face_mesh = self.get_parameter('use_face_mesh').value
         self._model_selection = self.get_parameter('model_selection').value
+        self._force_opencv = self.get_parameter('force_opencv').value
         
         # 人脸检测器
         self._face_detector = FaceDetector(
             use_face_mesh=self._use_face_mesh,
-            model_selection=self._model_selection
+            model_selection=self._model_selection,
+            force_opencv=self._force_opencv
         )
         
         # 无需 cv_bridge，直接处理 ROS Image

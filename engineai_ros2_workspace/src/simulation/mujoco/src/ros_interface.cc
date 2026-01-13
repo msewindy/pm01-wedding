@@ -30,30 +30,50 @@ RosInterface::RosInterface(const rclcpp::Node::SharedPtr& node, std::shared_ptr<
 RosInterface::~RosInterface() {}
 
 bool RosInterface::Initialize() {
+  // Check parameters
+  node_->declare_parameter("only_action", false);
+  only_action_ = node_->get_parameter("only_action").as_bool();
+  
   // Create subscriber with more compatible QoS settings
   using std::placeholders::_1;
+  rclcpp::QoS qos(1);
+  qos.best_effort();
+  qos.durability_volatile();
 
-  // 创建更兼容的QoS设置（与订阅者匹配）
-  auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
-  
-  // Create publishers with compatible QoS settings
-  joint_state_pub_ =
-      node_->create_publisher<interface_protocol::msg::JointState>(config_loader_->GetJointStateTopic(), qos);
-  RCLCPP_INFO(node_->get_logger(), "Joint state publisher created on topic: %s", 
-              config_loader_->GetJointStateTopic().c_str());
+  if (only_action_) {
+    RCLCPP_WARN(node_->get_logger(), 
+        "PARAMETER 'only_action' IS TRUE. ROS PUBLISHERS ARE DISABLED.");
+  } else {
+    // Create publishers only if only_action is false
+    joint_state_pub_ =
+        node_->create_publisher<interface_protocol::msg::JointState>(config_loader_->GetJointStateTopic(), qos);
+    RCLCPP_INFO(node_->get_logger(), "Joint state publisher created on topic: %s", 
+                config_loader_->GetJointStateTopic().c_str());
 
-  imu_pub_ = node_->create_publisher<interface_protocol::msg::ImuInfo>(config_loader_->GetImuTopic(), qos);
-  RCLCPP_INFO(node_->get_logger(), "IMU publisher created on topic: %s", 
-              config_loader_->GetImuTopic().c_str());
-  
-  // Create publisher for motion state
-  motion_state_pub_ = node_->create_publisher<interface_protocol::msg::MotionState>("/motion/motion_state", 10);
+    imu_pub_ = node_->create_publisher<interface_protocol::msg::ImuInfo>(config_loader_->GetImuTopic(), qos);
+    RCLCPP_INFO(node_->get_logger(), "IMU publisher created on topic: %s", 
+                config_loader_->GetImuTopic().c_str());
+    
+    // Create publisher for motion state
+    motion_state_pub_ = node_->create_publisher<interface_protocol::msg::MotionState>("/motion/motion_state", 10);
+    
+    // Create camera publishers
+    rgb_image_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("/camera/head/rgb/image_raw", qos);
+    depth_image_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("/camera/head/depth/image_raw", qos);
+    camera_info_pub_ = node_->create_publisher<sensor_msgs::msg::CameraInfo>("/camera/head/camera_info", qos);
+    
+    RCLCPP_INFO(node_->get_logger(), "Camera publishers created (/camera/head/*)");
+  }
 
   // 创建订阅者使用的QoS（KeepLast(1)用于命令订阅）
-  auto cmd_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
-
+  rclcpp::QoS cmd_qos(1);
+  cmd_qos.best_effort();
+  cmd_qos.durability_volatile();
+  
   joint_cmd_sub_ = node_->create_subscription<interface_protocol::msg::JointCommand>(
       config_loader_->GetJointCommandTopic(), cmd_qos, std::bind(&RosInterface::JointCommandCallback, this, _1));
+  RCLCPP_INFO(node_->get_logger(), "Joint command subscriber created on topic: %s", 
+              config_loader_->GetJointCommandTopic().c_str());
 
   // Get number of joints from config loader
   num_total_joints_ = config_loader_->GetNumTotalJoints();
@@ -77,20 +97,12 @@ bool RosInterface::Initialize() {
   
   // Create timer for periodic joint state publishing (100Hz = 10ms)
   // This ensures joint state is published even when simulation is paused
+  // Note: Inside callback, it checks for null publishers if only_action is true
   joint_state_timer_ = node_->create_wall_timer(
       std::chrono::milliseconds(10),
       std::bind(&RosInterface::JointStateTimerCallback, this));
 
-  // Create camera publishers
-  rgb_image_pub_ = node_->create_publisher<sensor_msgs::msg::Image>(
-      "/camera/head/rgb/image_raw", 10);
-  depth_image_pub_ = node_->create_publisher<sensor_msgs::msg::Image>(
-      "/camera/head/depth/image_raw", 10);
-  camera_info_pub_ = node_->create_publisher<sensor_msgs::msg::CameraInfo>(
-      "/camera/head/camera_info", 10);
-  RCLCPP_INFO(node_->get_logger(), "Camera publishers created");
-
-  // Create photo panel position subscriber
+  // Create photo panel position subscriber (Always created)
   photo_panel_sub_ = node_->create_subscription<geometry_msgs::msg::Point>(
       "/sim/photo_panel/position", 10,
       std::bind(&RosInterface::PhotoPanelPositionCallback, this, _1));
@@ -104,8 +116,10 @@ bool RosInterface::Initialize() {
   }
   
   RCLCPP_INFO(node_->get_logger(), "MuJoCo ROS interface initialized successfully");
-  RCLCPP_INFO(node_->get_logger(), "Joint state publisher subscription count: %zu", 
-              joint_state_pub_->get_subscription_count());
+  if (joint_state_pub_) {
+      RCLCPP_INFO(node_->get_logger(), "Joint state publisher subscription count: %zu", 
+                  joint_state_pub_->get_subscription_count());
+  }
   return true;
 }
 
@@ -159,6 +173,11 @@ void RosInterface::JointCommandCallback(const interface_protocol::msg::JointComm
 }
 
 void RosInterface::UpdateSimState(const mjModel* m, mjData* d) {
+  // Check if interface is enabled (publishers initialized)
+  if (!joint_state_pub_ || !imu_pub_) {
+    return;
+  }
+
   is_floating_base_ = (m->nv != m->nu);
 
   // Create messages
@@ -240,6 +259,8 @@ void RosInterface::SetModelAndData(mjModel* model, mjData* data) {
 }
 
 void RosInterface::MotionStateTimerCallback() {
+  if (!motion_state_pub_) return;
+
   // Create a motion state message
   auto motion_state_msg = std::make_unique<interface_protocol::msg::MotionState>();
   
@@ -305,7 +326,7 @@ bool RosInterface::InitializeCamera(const mjModel* model, mjrContext* shared_con
 }
 
 void RosInterface::CameraTimerCallback() {
-  if (!camera_initialized_ || !camera_renderer_ || !model_ || !data_) {
+  if (only_action_ || !camera_initialized_ || !camera_renderer_ || !model_ || !data_) {
     return;
   }
 
@@ -342,6 +363,7 @@ void RosInterface::RenderAndPublishCamera(const mjModel* model, const mjData* da
   auto now = node_->now();
   const auto& config = camera_renderer_->GetConfig();
 
+  
   // Publish RGB image
   {
     auto rgb_msg = std::make_unique<sensor_msgs::msg::Image>();
@@ -375,6 +397,7 @@ void RosInterface::RenderAndPublishCamera(const mjModel* model, const mjData* da
 
   // Publish camera info
   camera_info_pub_->publish(CreateCameraInfoMsg());
+  
 
   // Debug log every 5 seconds
   static auto last_log_time = std::chrono::steady_clock::now();

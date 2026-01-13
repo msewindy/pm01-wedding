@@ -153,17 +153,19 @@ class VideoRecorder:
                     break
             else:
                 break
+        
+        # 释放资源（确保在线程内释放）
+        if self.video_out:
+            self.video_out.release()
+        if self.video_cap:
+            self.video_cap.release()
+        if CV_AVAILABLE:
+            cv2.destroyAllWindows()
     
     def stop(self):
         """停止录制"""
-        if self.open:
-            self.open = False
-            if self.video_out:
-                self.video_out.release()
-            if self.video_cap:
-                self.video_cap.release()
-            if CV_AVAILABLE:
-                cv2.destroyAllWindows()
+        self.open = False
+        # 资源释放移至 record 线程结束时进行，避免线程竞争导致 crash
     
     def start(self):
         """启动录制线程"""
@@ -278,6 +280,32 @@ class AudioRecorder:
             
             if self.audio:
                 self.audio.terminate()
+    
+    def get_current_energy(self) -> float:
+        """获取当前音频能量 (RMS)"""
+        if not self.audio_frames:
+            return 0.0
+        try:
+            # 获取最后一帧数据
+            last_chunk = self.audio_frames[-1]
+            # 计算 RMS (Root Mean Square)
+            import math
+            import struct
+            
+            # 假设是 16-bit 整数
+            count = len(last_chunk) // 2
+            if count == 0:
+                return 0.0
+                
+            shorts = struct.unpack(f"{count}h", last_chunk)
+            sum_squares = sum(s ** 2 for s in shorts)
+            rms = math.sqrt(sum_squares / count)
+            
+            # 标准化到 0-1 (16bit max is 32768)
+            return rms / 32768.0
+        except Exception:
+            return 0.0
+
     
     def start(self):
         """启动录制线程"""
@@ -790,6 +818,13 @@ class InterviewRecorder:
         if not self._is_recording:
             return 0.0
         return time.time() - self._start_time
+    
+    def get_current_audio_energy(self) -> float:
+        """获取当前音频能量 (0.0 - 1.0)"""
+        if self._audio_recorder:
+            return self._audio_recorder.get_current_energy()
+        return 0.0
+
     
     @staticmethod
     def check_dependencies() -> bool:

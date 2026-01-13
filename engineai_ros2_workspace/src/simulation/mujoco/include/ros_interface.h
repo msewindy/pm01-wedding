@@ -110,6 +110,9 @@ class RosInterface {
   // Flag indicating if we have received the first valid command
   bool received_first_command_ = false;
 
+  // Flag indicating if we should only run actions (no publishing)
+  bool only_action_ = false;
+
   // ===== Camera-related members =====
   // Camera renderer
   std::unique_ptr<CameraRenderer> camera_renderer_;

@@ -30,28 +30,28 @@ class FaceFollowingHelper:
     """
     # ========== PID 控制配置 ==========
     # PID 控制参数（基于角度误差）
-    # 增大Kp以提高快速响应能力，支持快速移动目标
-    Kp = 0.1  # 比例系数（增大以提高响应速度，快速移动时能跟上）
-    # 说明：Kp=0.1 表示角度误差 0.1rad 时，单帧角度变化 0.01rad
-    #       如果控制周期为 0.02s（50Hz），则角速度 = 0.01 / 0.02 = 0.5 rad/s
+    # 减小 Kp 以防止过冲和震荡 (原 0.1)
+    Kp = 0.05  # 比例系数（减小以平滑运动）
+    # 说明：Kp=0.05 表示角度误差 0.1rad 时，单帧角度变化 0.005rad
+    #       如果控制周期为 0.02s，则角速度 = 0.25 rad/s
     
     Ki = 0.0  # 积分系数（可选，用于消除稳态误差）
     
-    Kd = 0.0  # 微分系数（可选，用于防止超调）
+    Kd = 0.01  # 微分系数（增加阻尼，防止震荡）
     
     # 方向反转标志（如果机器人旋转方向与目标移动方向相反，设置为 True）
     REVERSE_DIRECTION = True
     
     
     # 最大单帧角度变化（防止过大变化导致抖动）
-    # 增大以支持快速移动目标
-    MAX_ANGLE_CHANGE_PER_FRAME = 0.05  # rad，约2.9°（增大以支持快速移动）
+    # 减小以限制最大速度
+    MAX_ANGLE_CHANGE_PER_FRAME = 0.02  # rad，约1.1°
 
     
     # 接近目标时的减速配置
     APPROACH_DAMPING_ENABLED = True  # 是否启用接近目标减速
-    APPROACH_ANGLE_THRESHOLD = 0.05  # 接近目标角度阈值（rad，约2.9°，减小阈值，只在很接近时才减速）
-    APPROACH_DAMPING = 0.5  # 接近目标时的阻尼系数（增大，避免过度减速）
+    APPROACH_ANGLE_THRESHOLD = 0.10  # 接近目标角度阈值（rad，约5.7°，增大阈值，更早开始减速）
+    APPROACH_DAMPING = 0.3  # 接近目标时的阻尼系数（减小系数，增强减速效果）
     
     @staticmethod
     def pixel_to_angle(pixel_offset: float, fx: float) -> float:

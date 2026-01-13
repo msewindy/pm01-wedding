@@ -138,7 +138,7 @@ class FaceTracker:
         target_center = target.center
         best_match = None
         best_distance = float('inf')
-        POSITION_MATCH_THRESHOLD = 0.15  # 位置匹配阈值（归一化距离，约15%图像宽度）
+        POSITION_MATCH_THRESHOLD = 0.30  # 位置匹配阈值（归一化距离，从0.15放宽到0.30，处理ID切换时的位置跳变）
         
         # 优先匹配正脸，如果没有正脸再考虑侧脸
         for face in faces:
@@ -158,6 +158,20 @@ class FaceTracker:
                 elif face.is_frontal == best_match.is_frontal:
                     best_match = face
                     best_distance = distance
+        
+        # 调试日志：如果 ID 匹配失败且位置匹配也失败，记录原因
+        if best_match is None and faces:
+            # 找到最近的人脸距离，用于调试
+            min_dist = float('inf')
+            closest_id = -1
+            for face in faces:
+                d = ((target_center[0] - face.center[0]) ** 2 + (target_center[1] - face.center[1]) ** 2) ** 0.5
+                if d < min_dist:
+                    min_dist = d
+                    closest_id = face.face_id
+            
+            self.logger.debug(f"[FaceTracker] Match failed: target_id={target.face_id} not found. "
+                            f"Closest face id={closest_id} dist={min_dist:.3f} (thresh={POSITION_MATCH_THRESHOLD})")
         
         # 如果找到位置匹配，记录日志并返回
         if best_match is not None:

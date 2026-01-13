@@ -18,6 +18,76 @@ import math
 import threading
 
 
+class SmoothControl:
+    """
+    梯形速度规划平滑器 (Velocity and Acceleration Limited Smoother)
+    
+    保证运动在最大速度和最大加速度限制内，避免急启急停
+    """
+    def __init__(self, max_vel: float, max_acc: float, dt: float):
+        self.max_vel = max_vel
+        self.max_acc = max_acc
+        self.dt = dt
+        
+        self.current_pos = 0.0
+        self.current_vel = 0.0
+    
+    def reset(self, initial_pos: float):
+        self.current_pos = initial_pos
+        self.current_vel = 0.0
+        
+    def update(self, target_pos: float) -> float:
+        # 1. 计算位置误差
+        pos_error = target_pos - self.current_pos
+        
+        # 2. 如果误差很小，直接停止
+        if abs(pos_error) < 1e-4 and abs(self.current_vel) < 1e-4:
+            self.current_vel = 0.0
+            self.current_pos = target_pos
+            return self.current_pos
+            
+        # 3. 计算期望速度（带符号）
+        # 如果当前以最大减速度减速，能否在目标点停下？
+        # stop_dist = v^2 / (2*a)
+        stop_dist = (self.current_vel ** 2) / (2.0 * self.max_acc)
+        
+        # 确定运动方向
+        direction = 1.0 if pos_error > 0 else -1.0
+        
+        # 检查是否需要开始减速
+        # 即使方向一致，如果剩余距离小于刹车距离，也要减速（反向加速）
+        # 注意：这里是一个简化的二阶数控系统逻辑
+        
+        # 简单实现：P控制速度，然后限制加速度
+        # V_cmd = Kp * error (但我们要限制V_max)
+        # 更物理的实现：
+        
+        # 计算在最大加速度下，要想在目标点速度为0，当前允许的最大速度
+        # v_limit = sqrt(2 * a * dist)
+        v_limit = math.sqrt(2.0 * self.max_acc * abs(pos_error))
+        
+        # 目标速度受限于 v_limit 和 max_vel
+        target_vel = min(v_limit, self.max_vel) * direction
+        
+        # 4. 速度控制：从 current_vel 平滑过渡到 target_vel
+        # 限制每一步的速度变化量 (dv = a * dt)
+        max_dv = self.max_acc * self.dt
+        
+        vel_diff = target_vel - self.current_vel
+        
+        if abs(vel_diff) > max_dv:
+            # 限制加速度
+            self.current_vel += max_dv if vel_diff > 0 else -max_dv
+        else:
+            # 可以达到目标速度
+            self.current_vel = target_vel
+            
+        # 5. 更新位置
+        self.current_pos += self.current_vel * self.dt
+        
+        return self.current_pos
+
+
 class MotionAdapterNode(Node):
     """
     运动适配器节点
@@ -25,15 +95,7 @@ class MotionAdapterNode(Node):
     功能：
     - 订阅 FSM 的 look_at 目标
     - 保持所有关节稳定（高刚度）
-    - 头部/腰部执行小幅注视运动
-    
-    关节索引（PM01 V2, 24 DOF）：
-    - J00-J05: 左腿 (6 DOF)
-    - J06-J11: 右腿 (6 DOF)  
-    - J12: 腰部 Yaw (1 DOF)
-    - J13-J17: 左臂 (5 DOF)
-    - J18-J22: 右臂 (5 DOF)
-    - J23: 头部 Yaw (1 DOF)
+    - 头部/腰部执行小幅注视运动 (平滑处理)
     """
     
     # 关节配置
@@ -46,6 +108,30 @@ class MotionAdapterNode(Node):
     
     # 手臂关节索引
     ARM_JOINT_IDX = list(range(13, 23))  # J13-J22
+    
+    # 右臂关节索引 (J13=R_SHOULDER_PITCH, J14=R_SHOULDER_ROLL, J15=R_ELBOW_YAW, J16=R_ELBOW_PITCH)
+    # 假设 J13-J17 是右臂主要关节
+    RIGHT_ARM_INDICES = [13, 14, 15, 16]
+    
+    # Pose 定义 (关节角度)
+    # Neutral: 垂下
+    POSE_NEUTRAL_ANGLES = {
+        13: 0.0,  # R_SHOULDER_PITCH
+        14: 0.0,  # R_SHOULDER_ROLL
+        15: 0.0,  # R_ELBOW_YAW
+        16: 0.0   # R_ELBOW_PITCH
+    }
+    
+    # Mic Hold: 举起右手
+    # Shoulder Pitch: 抬起 (-0.5?)
+    # Elbow Pitch: 弯曲 (-1.5?)
+    # 具体角度需要根据实际机器人结构调整
+    POSE_MIC_HOLD_ANGLES = {
+        13: -0.5, # R_SHOULDER_PITCH (向前抬起)
+        14: -0.2, # R_SHOULDER_ROLL (稍微外展)
+        15: 0.0,  # R_ELBOW_YAW
+        16: -1.2  # R_ELBOW_PITCH (弯曲手肘)
+    }
     
     # 关节限位（弧度）- 增大运动范围
     WAIST_YAW_LIMIT = 1.0472  # ±0.4 rad ≈ ±30° (增大)
@@ -63,11 +149,24 @@ class MotionAdapterNode(Node):
         super().__init__('motion_adapter_node')
         
         # 声明参数
-        self.declare_parameter('control_rate', 500.0)  # 500Hz 与示例一致
-        self.declare_parameter('smooth_factor', 1.0)  # 更小的平滑系数，更平滑
+        self.declare_parameter('control_rate', 500.0)  # 500Hz
+        
+        # 运动平滑参数（最大速度 rad/s，最大加速度 rad/s^2）
+        self.declare_parameter('head_max_vel', 1.5)    # 头部较快
+        self.declare_parameter('head_max_acc', 5.0)    # 提高加速度以减少滞后 (原 3.0)
+        self.declare_parameter('waist_max_vel', 1.0)   # 腰部提速
+        self.declare_parameter('waist_max_acc', 4.0)   # 提高加速度匹配头部 (原 2.0)
+        self.declare_parameter('arm_max_vel', 1.0)     # 手臂速度
+        self.declare_parameter('arm_max_acc', 2.0)     # 手臂加速度
         
         control_rate = self.get_parameter('control_rate').value
-        self.smooth_factor = self.get_parameter('smooth_factor').value
+        
+        head_max_vel = self.get_parameter('head_max_vel').value
+        head_max_acc = self.get_parameter('head_max_acc').value
+        waist_max_vel = self.get_parameter('waist_max_vel').value
+        waist_max_acc = self.get_parameter('waist_max_acc').value
+        arm_max_vel = self.get_parameter('arm_max_vel').value
+        arm_max_acc = self.get_parameter('arm_max_acc').value
         
         # 状态标志
         self._initialized = False
@@ -82,9 +181,25 @@ class MotionAdapterNode(Node):
         self.target_waist_offset = 0.0
         self.target_head_offset = 0.0
         
-        # 当前偏移角度（平滑后）
+        # 手臂目标状态
+        self.target_arm_angles = self.POSE_NEUTRAL_ANGLES.copy()
+        
+        # 控制周期
+        self._control_period = 1.0 / control_rate
+        
+        # 初始化平滑器
+        self.head_smoother = SmoothControl(head_max_vel, head_max_acc, self._control_period)
+        self.waist_smoother = SmoothControl(waist_max_vel, waist_max_acc, self._control_period)
+        
+        # 手臂平滑器 (为每个关注的关节创建一个平滑器)
+        self.arm_smoothers = {}
+        for idx in self.RIGHT_ARM_INDICES:
+            self.arm_smoothers[idx] = SmoothControl(arm_max_vel, arm_max_acc, self._control_period)
+        
+        # 当前偏移角度/手臂角度（平滑后）
         self.current_waist_offset = 0.0
         self.current_head_offset = 0.0
+        self.current_arm_angles = self.POSE_NEUTRAL_ANGLES.copy()
         
         # QoS 配置 - 必须与仿真器/示例代码一致！
         # 参考: message_handler.cc 和 ros_interface.cc
@@ -93,7 +208,14 @@ class MotionAdapterNode(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=3  # 与 message_handler.cc 一致
+            depth=1
+        )
+
+        qos_cmd = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
         )
         
         # ========== 动态导入 interface_protocol ==========
@@ -103,7 +225,7 @@ class MotionAdapterNode(Node):
             self._JointCommand = JointCommand
             self._use_interface_protocol = True
             
-            # 订阅关节状态反馈 - 使用与仿真器一致的 QoS
+            # 订阅关节状态反馈
             self.joint_state_sub = self.create_subscription(
                 JointState,
                 '/hardware/joint_state',
@@ -111,11 +233,11 @@ class MotionAdapterNode(Node):
                 qos_sensor
             )
             
-            # 发布关节命令 - 必须使用 best_effort，与仿真器订阅端匹配！
+            # 发布关节命令
             self.joint_cmd_pub = self.create_publisher(
                 JointCommand,
                 '/hardware/joint_command',
-                qos_sensor
+                qos_cmd
             )
             
             self.get_logger().info("Using interface_protocol messages")
@@ -128,7 +250,6 @@ class MotionAdapterNode(Node):
             return
         
         # ========== 订阅 FSM look_at 目标 ==========
-        # 内部通信可以使用 reliable
         qos_internal = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
@@ -141,17 +262,25 @@ class MotionAdapterNode(Node):
             qos_internal
         )
         
+        # ========== 订阅 FSM Pose 目标 ==========
+        self.pose_sub = self.create_subscription(
+            String,
+            '/wedding/motion/pose',
+            self._on_pose,
+            10
+        )
+        
         # ========== 定时器 ==========
         # 等待初始化完成后再开始控制
         self.init_timer = self.create_timer(0.1, self._wait_for_joint_state)
         
-        # 控制定时器（初始化完成后启动）
-        control_period = 1.0 / control_rate
+        # 控制定时器在 wait_for_joint_state 中启动
         self.control_timer = None
-        self._control_period = control_period
         
         self.get_logger().info(f"MotionAdapterNode created, waiting for joint state...")
         self.get_logger().info(f"Control rate: {control_rate} Hz")
+        self.get_logger().info(f"Head Limit: vel={head_max_vel}, acc={head_max_acc}")
+        self.get_logger().info(f"Waist Limit: vel={waist_max_vel}, acc={waist_max_acc}")
     
     def _wait_for_joint_state(self) -> None:
         """等待获取初始关节状态"""
@@ -170,16 +299,23 @@ class MotionAdapterNode(Node):
             
             self._initialized = True
             self.get_logger().info("Initialization complete, starting control loop")
-            self.get_logger().info(f"Initial positions received: {self.NUM_JOINTS} joints")
+            
+            # 重置平滑器到当前状态（假设初始偏移为0）
+            self.head_smoother.reset(0.0)
+            self.waist_smoother.reset(0.0)
+            
+            # 重置手臂平滑器到初始位置 (通常是0，或者当前实际位置如果不同)
+            for idx in self.RIGHT_ARM_INDICES:
+                # 初始目标是从0开始(相对于initial_positions的偏移)
+                # 假设 initial_positions 就是 neutral
+                self.arm_smoothers[idx].reset(0.0)
+            
         else:
-            # ROS2 Python 没有 info_throttle，使用计数器节流
             if not hasattr(self, '_wait_log_count'):
                 self._wait_log_count = 0
             self._wait_log_count += 1
-            if self._wait_log_count % 10 == 1:  # 每 1 秒打印一次 (0.1s * 10)
-                self.get_logger().info(
-                    "Waiting for first joint state from simulator..."
-                )
+            if self._wait_log_count % 10 == 1:
+                self.get_logger().info("Waiting for first joint state from simulator...")
     
     def _on_joint_state(self, msg) -> None:
         """处理关节状态反馈"""
@@ -190,74 +326,61 @@ class MotionAdapterNode(Node):
                 if not self._received_joint_state:
                     # 首次接收，保存为初始位置
                     self.initial_positions = positions.copy()
+                    
+                    # 强制将 Head 和 Waist 的初始位置设为 0，以确保 look_at=0.5 (Offset=0) 对应绝对正中 (Motor Zero)
+                    # 解决启动时如果头/腰歪了，会导致后续控制一直有偏差的问题
+                    self.initial_positions[self.WAIST_YAW_IDX] = 0.0
+                    self.initial_positions[self.HEAD_YAW_IDX] = 0.0
+                    
                     self._received_joint_state = True
-                    self.get_logger().info("First joint state received!")
-                    # 打印初始位置用于调试
-                    self.get_logger().info(f"Initial positions (first 6 legs L): {positions[0:6]}")
-                    self.get_logger().info(f"Initial positions (6-12 legs R): {positions[6:12]}")
-                    self.get_logger().info(f"Initial positions (12 waist): {positions[12]}")
-                    self.get_logger().info(f"Initial positions (13-18 arm L): {positions[13:18]}")
-                    self.get_logger().info(f"Initial positions (18-23 arm R): {positions[18:23]}")
-                    self.get_logger().info(f"Initial positions (23 head): {positions[23]}")
+                    self.get_logger().info(f"First joint state received! Reset Head/Waist reference to 0.0")
                 
                 self.current_positions = positions
     
     def _on_look_at(self, msg: PointStamped) -> None:
         """
         处理 look_at 目标
-        
-        输入：归一化坐标 (0, 1)，中心为 (0.5, 0.5)
-        输出：目标关节偏移角度
         """
         if not self._initialized:
             return
         
-        # 归一化坐标转换为角度偏移
-        # 图像坐标系：x=0为左侧，x=1为右侧（标准OpenCV/MediaPipe）
-        # 映射关系：
-        #   x=0（图像左侧）→ 机器人左转 → 看左侧
-        #   x=0.5（图像中心）→ 机器人中心 → 看中心
-        #   x=1（图像右侧）→ 机器人右转 → 看右侧
+        # 归一化坐标(0~1)转换为偏移角度
         x = msg.point.x  # 0-1（0=左侧，1=右侧）
-        
-        # 转换为 -1 到 1 范围
-        # 标准映射：x=0（左侧）→ x_offset=-1, x=1（右侧）→ x_offset=1
         x_offset = (x - 0.5) * 2.0  # -1 (左) 到 1 (右)
         
         # 转换为偏移角度（弧度）
-        self.target_head_offset = x_offset * self.HEAD_YAW_LIMIT  # 不反转符号
-        self.target_waist_offset = x_offset * self.WAIST_YAW_LIMIT   # 不反转符号
-
-        # self.get_logger().info(
-        #     f"Head offset mismatch: current={self.current_head_offset:.6f}rad, "
-        #     f"target={self.target_head_offset:.6f}rad, "
-        #     f"diff={abs(self.current_head_offset - self.target_head_offset):.6f}rad"
-        # )
-
-        # self.get_logger().info(
-        #     f"Waist offset mismatch: current={self.current_waist_offset:.6f}rad, "
-        #     f"target={self.target_waist_offset:.6f}rad, "
-        #     f"diff={abs(self.current_waist_offset - self.target_waist_offset):.6f}rad"
-        # )
+        self.target_head_offset = x_offset * self.HEAD_YAW_LIMIT
+        self.target_waist_offset = x_offset * self.WAIST_YAW_LIMIT
+    
+    def _on_pose(self, msg: String) -> None:
+        """处理 Pose 目标"""
+        pose_name = msg.data
+        if pose_name == "interview_mic_hold":
+            self.target_arm_angles = self.POSE_MIC_HOLD_ANGLES.copy()
+            self.get_logger().info("Switching to Pose: MIC HOLD")
+        elif pose_name == "neutral":
+            self.target_arm_angles = self.POSE_NEUTRAL_ANGLES.copy()
+            self.get_logger().info("Switching to Pose: NEUTRAL")
+        else:
+            # 默认 Neutral
+            self.target_arm_angles = self.POSE_NEUTRAL_ANGLES.copy()
     
     def _control_loop(self) -> None:
         """
         控制循环 - 500Hz
-        
-        关键：必须控制所有关节，保持腿部高刚度
         """
         if not self._initialized or not self._use_interface_protocol:
             return
         
         with self._lock:
-            # 平滑过渡偏移角度
-            self.current_head_offset += self.smooth_factor * (
-                self.target_head_offset - self.current_head_offset
-            )
-            self.current_waist_offset += self.smooth_factor * (
-                self.target_waist_offset - self.current_waist_offset
-            )
-
+            # 使用梯形速度平滑器更新偏移
+            self.current_head_offset = self.head_smoother.update(self.target_head_offset)
+            self.current_waist_offset = self.waist_smoother.update(self.target_waist_offset)
+            
+            # 更新手臂关节
+            for idx in self.RIGHT_ARM_INDICES:
+                 target = self.target_arm_angles.get(idx, 0.0)
+                 self.current_arm_angles[idx] = self.arm_smoothers[idx].update(target)
             
             # 构建关节命令
             self._publish_joint_command()
@@ -266,10 +389,17 @@ class MotionAdapterNode(Node):
         """
         发布关节命令
         
-        策略：
-        - 腿部：保持初始位置，高刚度
-        - 腰部/头部：初始位置 + 偏移，中等刚度
-        - 手臂：保持初始位置，低刚度
+        策略（叠加控制 Superposition Control）：
+        1. 腿部 (Legs): 保持初始位置，高刚度以维持站立稳定。
+        2. 头部/腰部 (Head/Waist): 
+           - 由 FSM 的 look_at 目标控制跟随 (Tracking)。
+           - 位置 = 初始位置 + current_head/waist_offset。
+        3. 手臂 (Arms):
+           - 由 FSM 的 set_pose 目标控制姿态 (Pose)。
+           - 位置 = 初始位置 + current_arm_angles (独立平滑)。
+           
+        通过分别计算不同关节组的目标位置，并将它们合并到同一个 JointCommand 消息中，
+        实现了"一边跟随目标(动头/腰)，一边保持特定姿态(如举手)"的叠加效果。
         """
         msg = self._JointCommand()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -289,9 +419,13 @@ class MotionAdapterNode(Node):
                 msg.stiffness[i] = self.LEG_KP
                 msg.damping[i] = self.LEG_KD
             elif i in self.ARM_JOINT_IDX:
-                # 手臂：低刚度
-                msg.stiffness[i] = self.ARM_KP
-                msg.damping[i] = self.ARM_KD
+                # 手臂：低刚度 (除了正在动作的右臂？为了保持动作，可能需要提高刚度)
+                if i in self.RIGHT_ARM_INDICES:
+                    msg.stiffness[i] = self.BODY_KP # 提高刚度以保持姿势
+                    msg.damping[i] = self.BODY_KD
+                else:
+                    msg.stiffness[i] = self.ARM_KP
+                    msg.damping[i] = self.ARM_KD
             else:
                 # 腰部、头部：中等刚度
                 msg.stiffness[i] = self.BODY_KP
@@ -306,6 +440,14 @@ class MotionAdapterNode(Node):
         msg.position[self.HEAD_YAW_IDX] = (
             self.initial_positions[self.HEAD_YAW_IDX] + self.current_head_offset
         )
+        
+        # 设置右臂位置
+        for idx in self.RIGHT_ARM_INDICES:
+            # 假设 POSE 中定义的是相对于 0 位的绝对角度，还是相对于 Initial 的偏移？
+            # 这里的 MotionAdapter 逻辑是基于 Initial Position 的。
+            # 如果 Initial Position 是 垂下 (Neutral)，那么 Pose 定义的就是相对于垂下的偏移。
+            # 这样比较安全。
+            msg.position[idx] = self.initial_positions[idx] + self.current_arm_angles[idx]
         
         # parallel_parser_type: 0 = 不使用并行解析
         msg.parallel_parser_type = 0
@@ -336,3 +478,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+

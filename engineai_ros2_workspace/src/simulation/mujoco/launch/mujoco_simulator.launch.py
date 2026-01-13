@@ -21,6 +21,13 @@ def generate_launch_description():
                                '/opt/engineai_robotics_third_party/lib:/opt/ros/humble/lib:', EnvironmentVariable(name='LD_LIBRARY_PATH', default_value='')])
     ]
 
+    # Declare launch arguments
+    only_action_arg = DeclareLaunchArgument(
+        'only_action',
+        default_value='false',
+        description='If true, disable all detailed ROS topics'
+    )
+
     # 根据headless参数创建节点配置
     def launch_setup(context, *args, **kwargs):
 
@@ -37,6 +44,7 @@ def generate_launch_description():
             arguments=args,
             parameters=[
                 {'use_sim_time': True},
+                {'only_action': LaunchConfiguration('only_action')},
             ]
         )
 
@@ -48,5 +56,6 @@ def generate_launch_description():
     # Return launch description
     return LaunchDescription([
         *env_vars,
+        only_action_arg,
         mujoco_launch
     ])

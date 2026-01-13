@@ -94,8 +94,46 @@ class FaceDetector:
         # OpenCV Haar Cascade (预加载以提高性能)
         self._haar_cascade = None
         if CV_AVAILABLE:
-            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            self._haar_cascade = cv2.CascadeClassifier(cascade_path)
+            # 尝试多种方式找到 haarcascade 文件
+            cascade_path = None
+            
+            # 方法1: 使用 cv2.data.haarcascades (如果可用)
+            if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+                cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                if not os.path.exists(cascade_path):
+                    cascade_path = None
+            
+            # 方法2: 尝试常见的系统路径
+            if cascade_path is None or not os.path.exists(cascade_path):
+                possible_paths = [
+                    "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+                    "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+                    "/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml",
+                    "/usr/local/share/opencv/haarcascades/haarcascade_frontalface_default.xml",
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        cascade_path = path
+                        break
+            
+            # 方法3: 尝试从 OpenCV 安装路径查找
+            if cascade_path is None or not os.path.exists(cascade_path):
+                try:
+                    # cv2 已在模块级别导入，直接使用
+                    cv2_path = os.path.dirname(cv2.__file__)
+                    possible_cascade = os.path.join(cv2_path, "data", "haarcascade_frontalface_default.xml")
+                    if os.path.exists(possible_cascade):
+                        cascade_path = possible_cascade
+                except (AttributeError, OSError):
+                    pass
+            
+            if cascade_path and os.path.exists(cascade_path):
+                self._haar_cascade = cv2.CascadeClassifier(cascade_path)
+                if self._haar_cascade.empty():
+                    self.logger.warning(f"无法加载 Haar Cascade 文件: {cascade_path}")
+                    self._haar_cascade = None
+            else:
+                self.logger.warning("无法找到 haarcascade_frontalface_default.xml 文件，OpenCV 人脸检测将不可用")
         
         # 如果强制使用 OpenCV，直接设置标志
         if force_opencv:

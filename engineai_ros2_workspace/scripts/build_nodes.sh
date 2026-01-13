@@ -17,6 +17,7 @@ APPLICATION_NODES=(
     "robot_manager"
     "sound_hub"
     "system_monitor"
+    "wedding_interaction"
 )
 
 SIM_NODES=(
@@ -57,13 +58,41 @@ clean_build_cache() {
 clean_invalid_caches() {
     local build_dir="$1"
     local cleaned_count=0
+    local current_source_dir="$root_dir/src"
     
     # Find all CMakeCache.txt files recursively
     while IFS= read -r -d '' cache_file; do
+        local pkg_dir=$(dirname "$cache_file")
+        local pkg_name=$(basename "$pkg_dir")
+        local should_clean=false
+        
         # Check if cache contains wrong source path
-        if grep -q "/home/lingjing/project/engine_ai" "$cache_file" 2>/dev/null; then
-            local pkg_dir=$(dirname "$cache_file")
-            local pkg_name=$(basename "$pkg_dir")
+        # Method 1: Check if the source directory in cache doesn't exist
+        if [ -f "$cache_file" ]; then
+            # Extract source directory from CMakeCache.txt
+            local cached_source_dir=$(grep "^CMAKE_HOME_DIRECTORY:" "$cache_file" 2>/dev/null | cut -d "=" -f 2 | xargs)
+            
+            if [ -n "$cached_source_dir" ] && [ ! -d "$cached_source_dir" ]; then
+                should_clean=true
+            fi
+            
+            # Method 2: Check for known old paths
+            if grep -qE "(/home/lingjing/project/engine_ai|/home/lfw/Desktop)" "$cache_file" 2>/dev/null; then
+                should_clean=true
+            fi
+            
+            # Method 3: Check if the current source directory doesn't match
+            if [ -n "$cached_source_dir" ] && [ "$cached_source_dir" != "$current_source_dir" ]; then
+                # Check if it's a different absolute path (not just a symlink difference)
+                local cached_real=$(realpath -s "$cached_source_dir" 2>/dev/null || echo "")
+                local current_real=$(realpath -s "$current_source_dir" 2>/dev/null || echo "")
+                if [ -n "$cached_real" ] && [ -n "$current_real" ] && [ "$cached_real" != "$current_real" ]; then
+                    should_clean=true
+                fi
+            fi
+        fi
+        
+        if [ "$should_clean" = true ]; then
             echo "检测到 $pkg_name 包含旧路径的缓存，正在清理..."
             rm -rf "$cache_file" "$pkg_dir/CMakeFiles" 2>/dev/null
             ((cleaned_count++))

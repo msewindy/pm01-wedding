@@ -17,7 +17,22 @@ import numpy as np
 
 def detect_faces_opencv(image):
     """使用 OpenCV Haar Cascade 检测人脸"""
-    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    # 尝试多种方式找到 haarcascade 文件
+    cascade_path = None
+    if hasattr(cv2, 'data') and hasattr(cv2.data, 'haarcascades'):
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    if not cascade_path or not os.path.exists(cascade_path):
+        # 尝试其他路径
+        possible_paths = [
+            "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+            "/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                cascade_path = path
+                break
+    if not cascade_path or not os.path.exists(cascade_path):
+        raise FileNotFoundError("无法找到 haarcascade_frontalface_default.xml 文件")
     face_cascade = cv2.CascadeClassifier(cascade_path)
     
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)

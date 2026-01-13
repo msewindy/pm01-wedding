@@ -39,8 +39,8 @@ class SearchState(WeddingState):
     
     # 时间参数
     T_FACE_CONFIRM = 2.0       # 正脸持续确认时间（秒），临时改为20s用于测试跟随功能
-    T_SEARCH_TIMEOUT = 3.0     # 状态最大持续时间（秒）
-    T_NO_TARGET_TIMEOUT = 1.0     # 无目标超时时间（秒），超过此时间无目标则进入 IDLE
+    T_SEARCH_TIMEOUT = 5.0     # 状态最大持续时间（秒），从3.0增加到10.0，给平滑运动留足时间
+    T_NO_TARGET_TIMEOUT = 3.0     # 无目标超时时间（秒），超过此时间无目标则进入 IDLE
     
     
     

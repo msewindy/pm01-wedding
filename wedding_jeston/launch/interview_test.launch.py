@@ -68,7 +68,7 @@ def generate_launch_description():
     # 各节点独立的日志级别参数
     perception_node_log_level_arg = DeclareLaunchArgument(
         'perception_node_log_level',
-        default_value='info',
+        default_value='warn',
         description='Log level for perception_node (debug, info, warn, error, fatal)'
     )
     
@@ -167,7 +167,10 @@ def generate_launch_description():
             arguments=['--ros-args', '--log-level', LaunchConfiguration('motion_adapter_log_level')],
             parameters=[{
                 'control_rate': LaunchConfiguration('control_rate'),
-                'smooth_factor': 0.1,
+                'head_max_vel': 1.5,
+                'head_max_acc': 5.0,
+                'waist_max_vel': 1.0,
+                'waist_max_acc': 4.0,
             }],
         ),
         

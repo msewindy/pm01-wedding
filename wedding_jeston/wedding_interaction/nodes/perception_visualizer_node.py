@@ -263,8 +263,8 @@ class PerceptionVisualizerNode(Node):
                             f"[SEARCH状态] target_face_id={target_face_id} 不匹配，"
                             f"检测到的face_ids={[f.face_id for f in faces]}，显示所有人脸"
                         )
-        elif "TRACKING" in state_upper:
-            # TRACKING状态：优先显示正在追踪的face（绿色框）
+        elif "TRACKING" in state_upper or "INTERVIEW" in state_upper:
+            # TRACKING/INTERVIEW状态：优先显示正在追踪的face（绿色框）
             # 如果找不到匹配的face_id，则显示所有人脸（用于调试）
             if target_face_id is not None:
                 for face in faces:
@@ -277,7 +277,7 @@ class PerceptionVisualizerNode(Node):
                     # 输出警告日志（每30帧一次，避免日志过多）
                     if self._debug_counter % 30 == 0:
                         self.get_logger().warn(
-                            f"[TRACKING状态] target_face_id={target_face_id} 不匹配，"
+                            f"[{state}状态] target_face_id={target_face_id} 不匹配，"
                             f"检测到的face_ids={[f.face_id for f in faces]}，显示所有人脸"
                         )
         else:
@@ -296,10 +296,11 @@ class PerceptionVisualizerNode(Node):
             
             # 根据状态和是否匹配选择颜色
             state_upper = state.upper()
-            if "TRACKING" in state_upper:
+            if "TRACKING" in state_upper or "INTERVIEW" in state_upper:
                 if is_target:
                     color = self.COLOR_TRACKING_TARGET
-                    label = "TRACKING"
+                    # 如果是 INTERVIEW 状态显示 INTERVIEW，否则显示 TRACKING
+                    label = "INTERVIEW" if "INTERVIEW" in state_upper else "TRACKING"
                 else:
                     # 不匹配的face用灰色显示
                     color = self.COLOR_SIDE_FACE

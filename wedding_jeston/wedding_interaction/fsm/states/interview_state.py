@@ -58,7 +58,8 @@ class InterviewState(WeddingState):
         self._question_index = 0
         self._questions = [
             "您好，我是今天的特约记者，能送给新人一句祝福吗？",
-            "简单说一句祝福吧！"
+            "还有什么想对新人说的吗？",
+            "最后，请对着镜头挥挥手吧！"
         ]
         
         # 时间参数（可从配置读取）
@@ -68,6 +69,7 @@ class InterviewState(WeddingState):
         self.silence_threshold = 1.5      # 静音检测阈值（秒）
         self.ending_duration = 2.0        # 结束语时长（秒）
         self.done_duration = 1.0          # 完成后等待时长（秒）
+        self._voice_threshold = 0.02  # 音频能量阈值 (需要根据实际 mic 调整)
         
         # 录制参数
         self.recording_save_path = "/tmp/wedding_blessings/"  # 默认保存路径
@@ -101,33 +103,25 @@ class InterviewState(WeddingState):
             self.log(f"Interview target: face_id={self._tracked_face_id}, "
                     f"pos=({self._tracked_position[0]:.2f}, {self._tracked_position[1]:.2f})")
         else:
-            # 如果没有锁定目标，尝试从当前检测的人脸中选择
-            faces = self.fsm.data.perception.faces
-            if faces:
-                # 选择第一个正脸或第一个检测到的人脸
-                target_face = None
-                for face in faces:
-                    if face.is_frontal:
-                        target_face = face
-                        break
-                if target_face is None:
-                    target_face = faces[0]
-                
-                self._tracked_face_id = target_face.face_id
-                self._tracked_position = (target_face.center_x, target_face.center_y)
-                self.fsm.data.perception.target_face_id = target_face.face_id
-                self.log(f"Interview target (from detection): face_id={self._tracked_face_id}")
-            else:
-                self._tracked_face_id = None
-                self._tracked_position = None
-                self.log("Warning: No target for interview")
+            self.log("No locked target provided for interview")
+            self._tracked_face_id = None
+            self._tracked_position = None
+            self.has_target = False
+            return
+            
+        self.has_target = True
         
         # 重置 PID 状态
         if hasattr(self, '_pid_integral_x'):
             self._pid_integral_x = 0.0
             self._pid_integral_y = 0.0
             self._pid_last_error_x = 0.0
+            self._pid_last_error_x = 0.0
             self._pid_last_error_y = 0.0
+        
+        # 初始化语音活动检测
+        self._last_voice_time = self.fsm.get_current_time()
+
     
     def run(self) -> None:
         """执行采访逻辑"""
@@ -145,10 +139,12 @@ class InterviewState(WeddingState):
             
             # 更新目标丢失检测
             self.update_target_lost_time(has_target=True)
+            self.has_target = True
         else:
             # 未找到目标
             self.fsm.data.perception.target_face_id = None
             self.update_target_lost_time(has_target=False)
+            self.has_target = False
         
         # 2. 执行对话流程
         self._execute_interview_flow()
@@ -207,6 +203,8 @@ class InterviewState(WeddingState):
             if phase_elapsed >= self.question_duration:
                 self._enter_phase(self.PHASE_LISTENING)
                 self.listening_start_time = self.fsm.get_current_time()
+                # 重置语音活动计时，防止之前的静音累计导致立即退出
+                self._last_voice_time = self.fsm.get_current_time()
                 
         elif self.phase == self.PHASE_LISTENING:
             # 监听用户回答
@@ -216,8 +214,14 @@ class InterviewState(WeddingState):
             
             if silence_duration > self.silence_threshold or listening_duration > self.listening_timeout:
                 # 用户回答完成或超时
-                self._enter_phase(self.PHASE_ENDING)
-                self.set_speech("interview_thanks")
+                if self._question_index < len(self._questions):
+                    # 还有问题，继续提问
+                    self._enter_phase(self.PHASE_QUESTION)
+                    self._ask_question()
+                else:
+                    # 问题问完了，结束
+                    self._enter_phase(self.PHASE_ENDING)
+                    self.set_speech("interview_thanks")
                 
         elif self.phase == self.PHASE_ENDING:
             # 等待结束语播放完成
@@ -263,6 +267,18 @@ class InterviewState(WeddingState):
         # TODO: 实现 VAD 检测
         # 这里需要从音频数据中检测静音
         # 暂时返回0，表示没有静音
+        # 从录制器获取当前能量
+        if self._recorder:
+            energy = self._recorder.get_current_audio_energy()
+            current_time = self.fsm.get_current_time()
+            
+            # 简单的能量阈值检测
+            if energy > self._voice_threshold:
+                self._last_voice_time = current_time
+                # self.log(f"Voice detected: energy={energy:.4f}")
+            
+            return current_time - self._last_voice_time
+            
         return 0.0
     
     def _start_recording(self) -> None:
@@ -388,13 +404,23 @@ class InterviewState(WeddingState):
         base_next = super().check_transition()
         if base_next != self.state_name:
             return base_next
+            
+        # 如果没有目标，或者中途丢失目标，回到 IDLE
+        if not hasattr(self, 'has_target') or not self.has_target:
+            self.log("Target missing or lost, returning to IDLE")
+            return WeddingStateName.IDLE
         
-        # 采访完成 -> 回到 TRACKING
+        # 采访完成 -> 回到 IDLE
         if self.phase == self.PHASE_DONE:
             phase_elapsed = self.fsm.get_current_time() - self.phase_start_time
             if phase_elapsed >= self.done_duration:
-                self.log("Interview complete, returning to TRACKING")
-                return WeddingStateName.TRACKING
+                self.log("Interview complete, returning to IDLE")
+                return WeddingStateName.IDLE
+        
+        # 外部命令中断，也建议回到 IDLE 或者 TRACKING，这里保持原来的逻辑或者随之修改
+        # 如果是 STOP 命令，上面基类已经处理了回到 IDLE
+        # 如果是其他情况，保持不变
+
         
         # 外部命令中断
         if self.fsm.data.pending_command == WeddingEvent.CMD_STOP:

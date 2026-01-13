@@ -39,8 +39,8 @@ class FaceIDTracker:
     """
     
     # 匹配阈值
-    IOU_THRESHOLD = 0.25  # IoU 匹配阈值（降低以提高匹配成功率）
-    DISTANCE_THRESHOLD = 0.25  # 位置距离阈值（归一化，增加容错）
+    IOU_THRESHOLD = 0.15  # IoU 匹配阈值（从0.25降低到0.15，提高运动和噪声下的匹配率）
+    DISTANCE_THRESHOLD = 0.30  # 位置距离阈值（归一化，从0.25增加到0.30，增加容错）
     HIGH_IOU_THRESHOLD = 0.85  # 高 IoU 阈值（用于放宽距离限制）
     
     # 目标丢失清理（增加容错时间，避免位置固定时被过早清理）
@@ -119,10 +119,10 @@ class FaceIDTracker:
                 
                 # 匹配策略（优先级从高到低）：
                 # 1. 如果 IoU 很高（> 0.85），即使距离稍大也匹配（容错机制，处理微小变化）
-                # 2. 如果距离很近（< 0.1），即使 IoU 稍低也匹配（处理 bbox 微小变化）
+                # 2. 如果距离很近（< 0.15），即使 IoU 稍低也匹配（处理 bbox 微小变化）
                 # 3. 正常匹配：IoU > 阈值 且 距离 < 阈值
                 is_high_iou_match = iou > self.HIGH_IOU_THRESHOLD and distance < self.DISTANCE_THRESHOLD * 2.5
-                is_close_distance_match = distance < 0.1 and iou > 0.2  # 距离很近时，IoU 要求降低
+                is_close_distance_match = distance < 0.15 and iou > 0.1  # 距离很近时，IoU 要求进一步降低
                 is_normal_match = iou > self.IOU_THRESHOLD and distance < self.DISTANCE_THRESHOLD
                 
                 if is_high_iou_match or is_close_distance_match or is_normal_match:

@@ -9,6 +9,7 @@ from rclpy.node import Node
 from std_msgs.msg import String, Bool
 from std_srvs.srv import Trigger
 from pathlib import Path
+from ament_index_python.packages import get_package_share_directory
 
 from ..audio import SpeechManager, SpeechType
 
@@ -49,7 +50,15 @@ class SpeechPlayerNode(Node):
         
         # 如果未指定音频目录，使用默认目录
         if not audio_dir:
-            audio_dir = str(Path(__file__).parent.parent.parent / "audio_resources")
+            try:
+                share_dir = get_package_share_directory('wedding_interaction')
+                audio_dir = str(Path(share_dir) / "audio_resources")
+            except Exception as e:
+                # Fallback for local development
+                print(f"Error finding share directory: {e}")
+                audio_dir = str(Path(__file__).parent.parent.parent / "audio_resources")
+        
+        print(f"DEBUG: SpeechPlayer using audio_dir: {audio_dir}")
         
         # 创建语音管理器
         self.speech_manager = SpeechManager(

@@ -66,7 +66,7 @@ def generate_launch_description():
     # 各节点独立的日志级别参数
     perception_node_log_level_arg = DeclareLaunchArgument(
         'perception_node_log_level',
-        default_value='debug',
+        default_value='warn',
         description='Log level for perception_node (debug, info, warn, error, fatal)'
     )
     
@@ -78,7 +78,7 @@ def generate_launch_description():
     
     motion_adapter_log_level_arg = DeclareLaunchArgument(
         'motion_adapter_log_level',
-        default_value='warn',
+        default_value='info',
         description='Log level for motion_adapter_node (debug, info, warn, error, fatal)'
     )
     
@@ -170,20 +170,20 @@ def generate_launch_description():
         ),
         
         # 语音播放节点
-        Node(
-            package='wedding_interaction',
-            executable='speech_player',
-            name='speech_player_node',
-            output='screen',
-            arguments=['--ros-args', '--log-level', LaunchConfiguration('speech_player_log_level')],
-            parameters=[{
-                'audio_dir': audio_dir,
-                'tts_enabled': True,
-                'tts_engine': 'edge',  # 使用 edge-tts 以匹配预录音频音色
-                'tts_voice': 'zh-CN-XiaoxiaoNeural',  # 与 generate_audio.py 一致
-                'tts_rate': '+0%',
-            }],
-        ),
+        # Node(
+        #     package='wedding_interaction',
+        #     executable='speech_player',
+        #     name='speech_player_node',
+        #     output='screen',
+        #     arguments=['--ros-args', '--log-level', LaunchConfiguration('speech_player_log_level')],
+        #     parameters=[{
+        #         'audio_dir': audio_dir,
+        #         'tts_enabled': True,
+        #         'tts_engine': 'edge',  # 使用 edge-tts 以匹配预录音频音色
+        #         'tts_voice': 'zh-CN-XiaoxiaoNeural',  # 与 generate_audio.py 一致
+        #         'tts_rate': '+0%',
+        #     }],
+        # ),
         
         # 感知可视化节点（可选）
         Node(

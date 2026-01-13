@@ -29,12 +29,19 @@ class TrackingState(WeddingState):
         super().__init__(fsm, WeddingStateName.TRACKING)
         
         
-        # 目标丢失控制（使用基类的 _target_lost_time 和 _target_lost_timeout）
-        self.lost_timeout = 1.5  # 丢失超时（秒）
+        # 目标丢失控制
+        self.lost_timeout = 5.0  # 丢失超时（用于基类检测）
         
-        # 跟踪目标信息（使用基类的公共属性）
-        # self._tracked_face_id 和 self._tracked_position 已在基类中定义
-        self._match_distance_threshold = 0.2  # 位置匹配距离阈值（TRACKING 特定）
+        # 跟踪目标信息
+        self._match_distance_threshold = 0.2  # 位置匹配距离阈值
+        
+        # 状态转换参数
+        self.stable_tracking_duration = 2.0      # 进入稳定跟踪所需时长(秒)
+        self.auto_interview_duration = 1.5      # 稳定后自动触发采访的等待时长(秒)
+        self.interview_trigger_min_lost = 0.5    # 触发采访的最小丢失时长(秒)
+        self.interview_trigger_max_lost = 1.5    # 触发采访的最大丢失时长(秒)
+        self.idle_trigger_lost_time = 2.0        # 触发IDLE的丢失时长(秒)
+
         
     def on_enter(self) -> None:
         self.log("Entering TRACKING state")
@@ -43,6 +50,11 @@ class TrackingState(WeddingState):
         
         # 启用目标丢失检测（使用基类方法）
         self.enable_target_lost_detection(self.lost_timeout)
+        
+        # 跟踪稳定性状态初始化
+        self._tracking_start_time = 0.0
+        self._is_stable_tracking = False
+
         
         # 获取 SEARCH 锁定的目标
         locked_target = self.fsm.data.perception.locked_target
@@ -133,7 +145,29 @@ class TrackingState(WeddingState):
                 self.log(f"[TRACKING调试] 目标丢失，face_id={self._tracked_face_id}, "
                         f"lost_time={self._target_lost_time:.2f}s")
         
+        # 跟踪稳定性检测
+        if target_face is not None:
+            # 有目标，检查是否满足稳定跟踪条件
+            if self._tracking_start_time == 0.0:
+                self._tracking_start_time = self.fsm.get_current_time()
+            
+            # 如果连续跟踪超过一定时间，标记为稳定
+            if not self._is_stable_tracking:
+                if (self.fsm.get_current_time() - self._tracking_start_time) > self.stable_tracking_duration:
+                    self._is_stable_tracking = True
+                    self.log("Tracking detected as STABLE")
+ 
+        else:
+            # 目标丢失，重置跟踪开始时间（但不重置稳定标记，稳定标记在整个跟踪会话中保持有效，直到完全丢失退出）
+            # 或者：如果丢失，是否重置稳定标记？
+            # 逻辑：一旦稳定，就认为这是一次成功的跟踪交互。如果在交互中丢失，根据时间触发采访。
+            # 如果在这里重置，那么丢失时就无法判断之前是否稳定了。
+            # 所以不应该重置 _is_stable_tracking，只重置 _tracking_start_time 以备下次重新计算
+            self._tracking_start_time = 0.0
+        
         self.iter_count += 1
+
+            
     
     def _find_tracked_face(self, faces: list) -> Optional['FaceInfo']:
         """
@@ -173,12 +207,39 @@ class TrackingState(WeddingState):
             self.log("Interview voice command received, transitioning to INTERVIEW")
             return WeddingStateName.INTERVIEW
         
-        # 目标丢失超时 -> 送别（使用基类方法）
-        if self.is_target_lost_timeout():
-            self.log("Target lost, transitioning to FAREWELL")
-            return WeddingStateName.IDLE
+        # 自动采访触发：如果稳定跟踪超过一定时间（7秒），自动触发
+        if self._is_stable_tracking:
+            elapsed_since_stable_start = self.fsm.get_current_time() - self._tracking_start_time
+            if elapsed_since_stable_start > (self.stable_tracking_duration + self.auto_interview_duration):
+                 self.log(f"Stable tracking for {elapsed_since_stable_start:.2f}s (auto trigger), transitioning to INTERVIEW")
+                 return WeddingStateName.INTERVIEW
+        
+        # 目标丢失处理逻辑
+        # 获取当前目标丢失时长
+        lost_time = self._target_lost_time if self.fsm.data.perception.locked_target is None and self.fsm.data.perception.target_face_id is None else 0.0
+        # 注意: 上面的判断可能不准确，因为 _target_lost_time 是由 update_target_lost_time 更新的
+        # 直接使用 _target_lost_time 即可，因为它在 run() 中被维护
+        lost_time = self._target_lost_time
+        
+        if lost_time > 0:
+            # 1. 如果之前是稳定跟踪（成功tracking），且丢失时间较短（在1秒内），触发采访
+            # 这里的 "在1秒内" 理解为：丢失时长达到一个短阈值（如0.5s-1.5s），确认不是瞬间闪烁
+            # 同时必须小于回IDLE的阈值
+            if self._is_stable_tracking:
+                if self.interview_trigger_min_lost < lost_time < self.interview_trigger_max_lost:  
+                    self.log(f"Stable target lost for {lost_time:.2f}s (trigger in range {self.interview_trigger_min_lost}-{self.interview_trigger_max_lost}s), transitioning to INTERVIEW")
+                    return WeddingStateName.INTERVIEW
+            
+            # 2. 如果目标丢失超过设定时长，回到 IDLE
+            if lost_time > self.idle_trigger_lost_time:
+                self.log(f"Target lost for {lost_time:.2f}s (> {self.idle_trigger_lost_time}s), transitioning to IDLE")
+                return WeddingStateName.IDLE
+        
+        # 所有的超时都在上面处理了，这里不需要再调用 update_target_lost_timeout
+        # 或者保留它作为安全网（但参数需要调整）
         
         return self.state_name
+
     
     def on_exit(self) -> None:
         self.log("Exiting TRACKING state")

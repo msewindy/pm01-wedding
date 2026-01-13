@@ -51,8 +51,8 @@ class IdleState(WeddingState):
     
     # 动作包参数
     SWITCH_INTERVAL = 10.0       # 动作包切换间隔（秒）
-    SPEECH_PROBABILITY = 0.3     # 选择带语音动作包的概率
-    SPEECH_COOLDOWN = 30.0       # 语音冷却时间（秒）
+    SPEECH_PROBABILITY = 0.7     # 选择带语音动作包的概率
+    SPEECH_COOLDOWN = 15.0       # 语音冷却时间（秒）
     
     # 目标检测参数
     FACE_CONFIRM_TIME = 0.3      # 候选确认时间（秒）
@@ -61,7 +61,8 @@ class IdleState(WeddingState):
     
     # 正对前方检测参数
     FORWARD_FACING_THRESHOLD = 0.05  # 正对前方判断阈值（归一化坐标，0.05 = 5%）
-    FORWARD_FACING_DETECTION_TIME = 0.5  # 正对前方检测时间（秒）
+    FORWARD_FACING_DETECTION_TIME = 2.0  # 正对前方检测时间（秒），增加到5.0s以测试静止效果（总静止约10s）
+    FORWARD_FACING_COOLDOWN = 2.5  # 退出检测窗口后的冷却时间（秒），增加到4.0s并将在代码中添加随机抖动，防止共振列表
     
     
     def __init__(self, fsm: 'WeddingFSM'):
@@ -90,6 +91,7 @@ class IdleState(WeddingState):
         self._detection_window_start_time: float = 0.0  # 检测窗口开始的时间
         self._is_in_detection_window: bool = False     # 是否在检测窗口内
         self._just_exited_window: bool = False         # 是否刚退出检测窗口（用于强制执行action pack）
+        self._forward_facing_cooldown_end_time: float = 0.0 # 正对前方检测冷却结束时间
         
     def _init_pack_pools(self) -> None:
         """初始化动作包池（状态特定）"""
@@ -120,6 +122,7 @@ class IdleState(WeddingState):
         self._forward_facing_start_time = 0.0
         self._detection_window_start_time = 0.0
         self._is_in_detection_window = False
+        self._forward_facing_cooldown_end_time = 0.0
         
         # 重置已播放列表
         self._played_speeches.clear()
@@ -207,14 +210,17 @@ class IdleState(WeddingState):
                 self.execute_action_pack()
                 self._just_exited_window = False  # 重置标志
             else:
-                # 检查是否正对前方
+                # 检查是否正对前方，并且不在冷却期
                 is_facing = self._is_facing_forward()
-                if is_facing:
-                    # 正对前方：停止执行action pack，保持静止，开始计时
+                is_in_cooldown = current_time < self._forward_facing_cooldown_end_time
+                
+                if is_facing and not is_in_cooldown:
+                    # 正对前方且不在冷却：停止执行action pack，保持静止，开始计时
                     # 这样可以让 _is_facing_forward() 持续返回 True，累积到 0.5 秒
                     self.set_look_at(0.5, 0.5)
                 else:
-                    # 不正对前方：执行 action pack（正常摆动）
+                    # 不正对前方或在冷却期：执行 action pack（正常摆动）
+                    # 即使 is_facing=True，如果 is_in_cooldown=True，也会执行这里，从而让机器人摆动远离中心
                     self.execute_action_pack()
         
         # 4. 更新目标检测（在 check_transition 中处理）
@@ -272,8 +278,11 @@ class IdleState(WeddingState):
         look_at = self.fsm.data.motion.look_at_target
         # 检查是否接近中心 (0.5, 0.5)
         dx = abs(look_at[0] - 0.5)
-        dy = abs(look_at[1] - 0.5)
-        is_facing = dx < threshold and dy < threshold
+        # dy = abs(look_at[1] - 0.5)
+        
+        # 修正：只检查 X 轴 (Pan) 是否居中，忽略 Y 轴 (Tilt)
+        # 这样即使动作包包含点头/抬头动作，只要转到正面也会触发暂停
+        is_facing = dx < threshold # and dy < threshold
         
         return is_facing
     
@@ -289,6 +298,12 @@ class IdleState(WeddingState):
         Args:
             current_time: 当前时间
         """
+        # 检查冷却
+        if current_time < self._forward_facing_cooldown_end_time:
+            # 在冷却期，不进行正对前方检测
+            self._forward_facing_start_time = 0.0
+            return
+
         is_facing = self._is_facing_forward()
         
         if is_facing:
@@ -313,16 +328,35 @@ class IdleState(WeddingState):
                         window_duration = current_time - self._detection_window_start_time
                         if window_duration >= self.FORWARD_FACING_DETECTION_TIME:
                             # 检测窗口超时（0.5s内没有检测到人脸），退出检测窗口
-                            self.log(f"[INFO] 退出检测窗口 (窗口内 {window_duration:.2f}s 未检测到人脸)")
+                            
+                            # ========== 平滑恢复逻辑 ==========
+                            # 计算暂停持续时间 (从开始正对前方到现在)
+                            pause_duration = current_time - self._forward_facing_start_time
+                            # 调整动作包开始时间，使其认为"时间没走"，从而继续之前的相位
+                            self._pack_start_time += pause_duration
+                                                    
+                            self.log(f"[INFO] 退出检测窗口 (窗口内 {window_duration:.2f}s 未检测到人脸) Paused {pause_duration:.2f}s")
+                            
                             self._forward_facing_start_time = 0.0
                             self._detection_window_start_time = 0.0
                             self._is_in_detection_window = False
                             self._just_exited_window = True  # 标记刚退出检测窗口，下次run()时强制执行action pack
+                            
+                            # 设置冷却时间，防止立即再次被捕获
+                            # 添加随机抖动 (0.5 ~ 1.5s) 防止与动作包周期产生共振（即每次冷却结束刚好回到中心）
+                            jitter = random.uniform(0.5, 1.5)
+                            self._forward_facing_cooldown_end_time = current_time + self.FORWARD_FACING_COOLDOWN + jitter
+                            self.log(f"[INFO] 进入冷却期 {self.FORWARD_FACING_COOLDOWN + jitter:.2f}s")
         else:
             # 不正对前方，重置状态
             if self._forward_facing_start_time > 0.0:
                 # 刚离开正对前方状态
                 elapsed = current_time - self._forward_facing_start_time
+                
+                # ========== 平滑恢复逻辑 ==========
+                # 即使是意外离开正对前方（不太可能，因为被锁定在0.5），也补偿时间
+                self._pack_start_time += elapsed
+                
                 if self._is_in_detection_window:
                     if self._candidate_face is None:
                         # 没有候选，退出检测窗口
@@ -331,6 +365,9 @@ class IdleState(WeddingState):
                         self._detection_window_start_time = 0.0
                         self._is_in_detection_window = False
                         self._just_exited_window = True  # 标记刚退出检测窗口，下次run()时强制执行action pack
+                        # 设置冷却
+                        jitter = random.uniform(0.5, 1.5)
+                        self._forward_facing_cooldown_end_time = current_time + self.FORWARD_FACING_COOLDOWN + jitter
                     else:
                         # 有候选但离开正对前方，保持检测窗口（等待确认）
                         pass
