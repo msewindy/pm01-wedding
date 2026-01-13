@@ -81,6 +81,11 @@ class WeddingState(ABC):
         self._target_lost_timeout: Optional[float] = None
         self._state_timeout: Optional[float] = None
         
+        # ========== 全局配置缓存 ==========
+        self._enable_speech = True
+        if self.fsm and self.fsm.data.config:
+             self._enable_speech = self.fsm.data.config.get('enable_speech', True)
+        
     @abstractmethod
     def on_enter(self) -> None:
         pass
