@@ -41,46 +41,14 @@ import sys
 from pathlib import Path
 from typing import Dict
 
-# 语音库定义
-SPEECH_LIBRARY: Dict[str, str] = {
-    # IDLE 状态
-    "idle_greeting": "你好呀，欢迎来到婚礼现场！",
-    "idle_welcome": "欢迎欢迎，今天是个好日子！",
-    "idle_random_1": "有什么可以帮你的吗？",
-    "idle_random_2": "需要合影吗？摆个 Pose 就可以啦！",
-    
-    # 问候
-    "greeting_hello": "你好！很高兴见到你！",
-    "greeting_nice": "哇，你今天真好看！",
-    "greeting_bride": "恭喜恭喜！新娘子真美！",
-    "greeting_groom": "恭喜恭喜！新郎官好帅！",
-    
-    # 合影
-    "photo_ready": "准备好了吗？",
-    "photo_countdown_3": "三！",
-    "photo_countdown_2": "二！",
-    "photo_countdown_1": "一！",
-    "photo_cheese": "茄子！",
-    "photo_done": "拍好啦！照片很棒哦！",
-    "photo_again": "再来一张吗？",
-    
-    # 送别
-    "farewell_bye": "再见！祝你们幸福美满！",
-    "farewell_happy": "百年好合！永结同心！",
-    "farewell_thanks": "谢谢光临！玩得开心！",
-    
-    # 采访
-    "interview_start": "让我来采访一下！",
-    "interview_question_1": "请问你和新人是什么关系呀？",
-    "interview_question_2": "有什么祝福想对新人说的吗？",
-    "interview_question_3": "来分享一个你和新人的小故事吧！",
-    "interview_thanks": "谢谢你的祝福！",
-    
-    # 系统
-    "system_error": "抱歉，出了点小问题。",
-    "system_too_close": "请稍微后退一点点哦。",
-    "system_starting": "系统启动中，请稍等。",
-}
+# 调整 sys.path 以便导入模块
+try:
+    from wedding_interaction.audio.speech_resources import SPEECH_LIBRARY, DEFAULT_TTS_CONFIG
+except ImportError:
+    # 允许直接运行脚本
+    sys.path.append(str(Path(__file__).parent.parent))
+    from wedding_interaction.audio.speech_resources import SPEECH_LIBRARY, DEFAULT_TTS_CONFIG
+
 
 
 def get_output_dir() -> Path:
@@ -95,8 +63,8 @@ async def generate_with_edge_tts(
     speech_id: str,
     text: str,
     output_dir: Path,
-    voice: str = "zh-CN-YunxiaNeural",
-    rate: str = "+0%",
+    voice: str = DEFAULT_TTS_CONFIG["voice"],
+    rate: str = DEFAULT_TTS_CONFIG["rate"],
 ) -> bool:
     """
     使用 edge-tts 生成音频
@@ -247,14 +215,14 @@ async def main():
     parser.add_argument(
         "--voice",
         type=str,
-        default="zh-CN-YunxiaNeural",
-        help="Edge TTS 声音 (default: zh-CN-YunxiaNeural)",
+        default=DEFAULT_TTS_CONFIG["voice"],
+        help=f"Edge TTS 声音 (default: {DEFAULT_TTS_CONFIG['voice']})",
     )
     parser.add_argument(
         "--rate",
         type=str,
-        default="+0%",
-        help="语速调整 (default: +0%%)",
+        default=DEFAULT_TTS_CONFIG["rate"],
+        help=f"语速调整 (default: {DEFAULT_TTS_CONFIG['rate'].replace('%', '%%')})",
     )
     parser.add_argument(
         "--list",

@@ -27,16 +27,18 @@ class WeddingFSM:
     参考：engineai_humanoid/FSM_States/ControlFSM.h
     """
     
-    def __init__(self, config: Dict = None, ros2_logger = None):
+    def __init__(self, config: Dict = None, ros2_logger = None, action_manager = None):
         """
         初始化 FSM
         
         Args:
             config: 配置参数字典
             ros2_logger: ROS2 logger 对象（可选），如果提供，状态类将使用 ROS2 logger
+            action_manager: 动作管理器实例
         """
         self.logger = logging.getLogger("WeddingFSM")
         self._ros2_logger = ros2_logger  # ROS2 logger（如果提供）
+        self.action_manager = action_manager # 动作管理器
         self._debug_pub = None  # 调试日志发布器（如果提供）
         self._debug_log_file = None  # 调试日志文件（如果启用）
         

@@ -39,6 +39,7 @@ from ..fsm.states import (
     SafeStopState,
     InterviewState,
 )
+from ..action_pack.action_manager import ActionManager
 
 
 class WeddingFSMNode(Node):
@@ -107,14 +108,17 @@ class WeddingFSMNode(Node):
         
         self.get_logger().info(f"Action enabled: {enable_action}, Speech enabled: {enable_speech}")
         
-        # 创建 FSM（传入配置和 ROS2 logger）
+        # 初始化 ActionManager
+        self.action_manager = ActionManager(self)
+        
+        # 创建 FSM（传入配置、ROS2 logger 和 ActionManager）
         fsm_config = {
             'enable_action': enable_action,
             'enable_speech': enable_speech,
         }
         # 传递 ROS2 logger 给 FSM，这样状态类可以使用 ROS2 logger
         ros2_logger = self.get_logger()
-        self.fsm = WeddingFSM(config=fsm_config, ros2_logger=ros2_logger)
+        self.fsm = WeddingFSM(config=fsm_config, ros2_logger=ros2_logger, action_manager=self.action_manager)
         
         # 注册状态
         self.fsm.register_state(IdleState(self.fsm))
@@ -217,7 +221,7 @@ class WeddingFSMNode(Node):
         # 动作指令：Pose
         self.pose_pub = self.create_publisher(
             String,
-            '/wedding/motion/pose',
+            '/wedding/motion/set_pose',
             10
         )
         
@@ -473,10 +477,17 @@ class WeddingFSMNode(Node):
         # 运行 FSM
         self.fsm.run_once()
         
-        # 发布动作指令
+        # 动作管理器更新 (必须周期性调用)
+        if self.fsm.action_manager:
+            current_time = self.get_clock().now().nanoseconds / 1e9
+            self.fsm.action_manager.update(current_time)
+        
+        # 发布动作指令 (Legacy: 如果ActionManager已接管Pose发布，这里可能需要调整)
+        # 目前保留 LookAt 发布，Pose 由 ActionManager 发布
         self._publish_motion()
         
-        # 发布语音指令
+        # 发布语音指令 (Legacy: FSM.data.audio.pending_speech)
+        # ActionManager 也会独立发布语音，两者并行不冲突
         self._publish_speech()
         
         # 重置单帧感知数据
@@ -502,6 +513,11 @@ class WeddingFSMNode(Node):
         motion = self.fsm.data.motion
         
         # 发布 Pose（仅当变化时）
+        # 注意：现在 ActionManager 也会发布 /set_pose
+        # 如果 FSM 通过 execute_action 设置了 Action，ActionManager 会负责发布 Pose
+        # 如果 FSM 通过 set_pose() 设置了 target_pose，这里负责发布
+        # 为了避免冲突，我们检查 target_pose 是否非空且变化
+        # 并统一 Topic 名称为 /wedding/motion/set_pose (Adapter 监听的)
         if motion.target_pose != self._last_pose:
             msg = String()
             msg.data = motion.target_pose

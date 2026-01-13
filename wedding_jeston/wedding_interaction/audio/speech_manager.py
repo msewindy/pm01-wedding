@@ -23,6 +23,8 @@ import os
 import asyncio
 import tempfile
 
+from .speech_resources import SPEECH_LIBRARY, DEFAULT_TTS_CONFIG
+
 
 class SpeechType(Enum):
     """语音类型"""
@@ -57,8 +59,8 @@ class SpeechManager:
         tts_enabled: bool = True,
         tts_engine: str = "edge",  # "edge" | "piper" | "sherpa" | "mock"
         tts_model: Optional[str] = None,
-        tts_voice: str = "zh-CN-XiaoxiaoNeural",  # Edge TTS 声音
-        tts_rate: str = "+0%",  # Edge TTS 语速
+        tts_voice: str = DEFAULT_TTS_CONFIG["voice"],  # Edge TTS 声音
+        tts_rate: str = DEFAULT_TTS_CONFIG["rate"],  # Edge TTS 语速
     ):
         """
         初始化语音管理器
@@ -68,8 +70,8 @@ class SpeechManager:
             tts_enabled: 是否启用 TTS
             tts_engine: TTS 引擎类型 ("edge" 推荐，与预录音频音色一致)
             tts_model: TTS 模型路径（Piper/Sherpa 使用）
-            tts_voice: Edge TTS 声音（默认: zh-CN-XiaoxiaoNeural）
-            tts_rate: Edge TTS 语速（默认: +0%）
+            tts_voice: Edge TTS 声音
+            tts_rate: Edge TTS 语速
         """
         self.logger = logging.getLogger("SpeechManager")
         
@@ -113,43 +115,7 @@ class SpeechManager:
         
         # 固定语音定义（ID -> 文本）
         # 音频文件命名规则：{id}.wav 或 {id}.mp3
-        fixed_speeches = {
-            # IDLE 状态
-            "idle_greeting": "你好呀，欢迎来到婚礼现场！",
-            "idle_welcome": "欢迎欢迎，今天是个好日子！",
-            "idle_random_1": "有什么可以帮你的吗？",
-            "idle_random_2": "需要合影吗？摆个 Pose 就可以啦！",
-            
-            # 问候
-            "greeting_hello": "你好！很高兴见到你！",
-            "greeting_nice": "哇，你今天真好看！",
-            "greeting_bride": "恭喜恭喜！新娘子真美！",
-            "greeting_groom": "恭喜恭喜！新郎官好帅！",
-            
-            # 合影
-            "photo_ready": "准备好了吗？",
-            "photo_countdown_3": "三！",
-            "photo_countdown_2": "二！",
-            "photo_countdown_1": "一！",
-            "photo_cheese": "茄子！",
-            "photo_done": "拍好啦！",
-            "photo_again": "再来一张吗？",
-            
-            # 送别
-            "farewell_bye": "再见！祝你们幸福美满！",
-            "farewell_happy": "百年好合！永结同心！",
-            "farewell_thanks": "谢谢光临！",
-            
-            # 采访
-            "interview_start": "让我来采访一下！",
-            "interview_question_1": "请问你和新人是什么关系呀？",
-            "interview_question_2": "有什么祝福想对新人说的吗？",
-            "interview_thanks": "谢谢你的祝福！",
-            
-            # 系统
-            "system_error": "抱歉，出了点小问题。",
-            "system_too_close": "请稍微后退一点点。",
-        }
+        fixed_speeches = SPEECH_LIBRARY
         
         for speech_id, text in fixed_speeches.items():
             # 检查是否有预录音频文件

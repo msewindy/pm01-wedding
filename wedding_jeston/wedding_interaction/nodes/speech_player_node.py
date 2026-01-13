@@ -12,6 +12,7 @@ from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 
 from ..audio import SpeechManager, SpeechType
+from ..audio.speech_resources import DEFAULT_TTS_CONFIG
 
 
 class SpeechPlayerNode(Node):
@@ -36,10 +37,10 @@ class SpeechPlayerNode(Node):
         # 声明参数
         self.declare_parameter('audio_dir', '')
         self.declare_parameter('tts_enabled', True)
-        self.declare_parameter('tts_engine', 'edge')  # "edge" (推荐), "piper", "sherpa", "mock"
+        self.declare_parameter('tts_engine', DEFAULT_TTS_CONFIG['engine'])  # "edge" (推荐), "piper", "sherpa", "mock"
         self.declare_parameter('tts_model', '')
-        self.declare_parameter('tts_voice', 'zh-CN-XiaoxiaoNeural')  # Edge TTS 声音
-        self.declare_parameter('tts_rate', '+0%')  # Edge TTS 语速
+        self.declare_parameter('tts_voice', DEFAULT_TTS_CONFIG['voice'])  # Edge TTS 声音
+        self.declare_parameter('tts_rate', DEFAULT_TTS_CONFIG['rate'])  # Edge TTS 语速
         
         audio_dir = self.get_parameter('audio_dir').value
         tts_enabled = self.get_parameter('tts_enabled').value
