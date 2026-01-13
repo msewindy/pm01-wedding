@@ -65,8 +65,9 @@ class InterviewState(WeddingState):
         # 时间参数（可从配置读取）
         self.greeting_duration = 3.0      # 开场白时长（秒）
         self.question_duration = 2.0      # 问题播放时长（秒）
-        self.listening_timeout = 10.0     # 监听超时（秒）
+        self.listening_timeout = 8.0     # 监听超时（秒）
         self.silence_threshold = 1.5      # 静音检测阈值（秒）
+        self.has_spoken = False           # 记录用户是否已开口
         self.ending_duration = 2.0        # 结束语时长（秒）
         self.done_duration = 1.0          # 完成后等待时长（秒）
         self._voice_threshold = 0.02  # 音频能量阈值 (需要根据实际 mic 调整)
@@ -203,8 +204,9 @@ class InterviewState(WeddingState):
             if phase_elapsed >= self.question_duration:
                 self._enter_phase(self.PHASE_LISTENING)
                 self.listening_start_time = self.fsm.get_current_time()
-                # 重置语音活动计时，防止之前的静音累计导致立即退出
+                # 重置语音活动计时
                 self._last_voice_time = self.fsm.get_current_time()
+                self.has_spoken = False
                 
         elif self.phase == self.PHASE_LISTENING:
             # 监听用户回答
@@ -212,7 +214,19 @@ class InterviewState(WeddingState):
             silence_duration = self._get_silence_duration()
             listening_duration = self.fsm.get_current_time() - self.listening_start_time
             
-            if silence_duration > self.silence_threshold or listening_duration > self.listening_timeout:
+            # 判断是否完成回答：
+            # 1. 用户已经开口 (has_spoken=True) 且 检测到足够长的静音
+            # 2. 只有在超时的情况下，才允许没开口直接结束
+            
+            answered = self.has_spoken and (silence_duration > self.silence_threshold)
+            timeout = listening_duration > self.listening_timeout
+            
+            if answered or timeout:
+                if answered:
+                    self.log(f"Answer detected (silence: {silence_duration:.2f}s)")
+                else:
+                    self.log(f"Listening timeout (duration: {listening_duration:.2f}s)")
+                    
                 # 用户回答完成或超时
                 if self._question_index < len(self._questions):
                     # 还有问题，继续提问
@@ -247,7 +261,13 @@ class InterviewState(WeddingState):
             # 所以索引要+1
             speech_id = f"interview_question_{self._question_index + 1}"
             self.set_speech(speech_id)
-            self.log(f"Asking question {self._question_index + 1}: {question}")
+            
+            # 根据文本长度动态估算时长
+            # 基础 1.5s + 每个字 0.25s
+            est_duration = 1.5 + len(question) * 0.25
+            self.question_duration = max(2.0, est_duration)
+            
+            self.log(f"Asking question {self._question_index + 1}: {question} (est_time: {self.question_duration:.2f}s)")
             self._question_index += 1
         else:
             # 所有问题都问完了，直接进入结束阶段
@@ -275,7 +295,9 @@ class InterviewState(WeddingState):
             # 简单的能量阈值检测
             if energy > self._voice_threshold:
                 self._last_voice_time = current_time
-                # self.log(f"Voice detected: energy={energy:.4f}")
+                if not self.has_spoken and self.phase == self.PHASE_LISTENING:
+                    self.has_spoken = True
+                    self.log(f"Voice started: energy={energy:.4f}")
             
             return current_time - self._last_voice_time
             

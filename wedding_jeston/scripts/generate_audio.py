@@ -95,7 +95,7 @@ async def generate_with_edge_tts(
     speech_id: str,
     text: str,
     output_dir: Path,
-    voice: str = "zh-CN-XiaoxiaoNeural",
+    voice: str = "zh-CN-YunxiaNeural",
     rate: str = "+0%",
 ) -> bool:
     """
@@ -247,8 +247,8 @@ async def main():
     parser.add_argument(
         "--voice",
         type=str,
-        default="zh-CN-XiaoxiaoNeural",
-        help="Edge TTS 声音 (default: zh-CN-XiaoxiaoNeural)",
+        default="zh-CN-YunxiaNeural",
+        help="Edge TTS 声音 (default: zh-CN-YunxiaNeural)",
     )
     parser.add_argument(
         "--rate",
