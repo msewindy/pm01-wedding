@@ -16,17 +16,24 @@ ACTION_PACKS = {
         "pose": "neutral",
         "motion_strategy": "sway_normal",
         "speech_group": [
-            "idle_greeting", 
-            "idle_welcome", 
             "idle_random_1",
-            "idle_random_2"
+            "idle_greeting"
         ],
         "speech_config": {
             "mode": "periodic",
-            "interval_min": 3.0,
-            "interval_max": 10.0,
-            "delay": 0.5
+            "interval_min": 10.0,
+            "interval_max": 20.0,
+            "delay": 1.0,
+            "probability": 0.6 # 60% 概率播放语音，避免太吵
         }
+    },
+    
+    # 静态观察 (Observe Phase)
+    "idle_observe": {
+        "pose": "neutral",
+        "motion_strategy": None,  # 无运动，保持静止
+        "speech_group": [],       # 不说话
+        "speech_config": None
     },
     
     "greeting": {
@@ -41,7 +48,8 @@ ACTION_PACKS = {
         "speech_config": {
             "mode": "once",
             "delay": 0.5
-        }
+        },
+        "duration": 3.5 # 动作持续时间 (wav + speech)
     },
     
     # ==================== SEARCH ====================
@@ -61,9 +69,9 @@ ACTION_PACKS = {
         ],
         "speech_config": {
             "mode": "periodic",
-            "interval_min": 12.0,
+            "interval_min": 15.0,
             "interval_max": 25.0,
-            "delay": 5.0
+            "delay": 2.0
         }
     },
     

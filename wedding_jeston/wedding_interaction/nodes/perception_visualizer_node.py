@@ -14,6 +14,7 @@ import numpy as np
 import json
 import time
 import threading
+from collections import deque
 
 try:
     import cv2
@@ -65,8 +66,7 @@ class PerceptionVisualizerNode(Node):
         self._publish_rate = self.get_parameter('publish_rate').value
         
         # 数据缓存
-        self._latest_image = None
-        self._latest_faces = []
+        self._image_buffer = deque(maxlen=30)  # 存储最近30帧 (约1秒)
         self._latest_state = "UNKNOWN"
         self._latest_face_detected = False
         self._target_face_id = None  # 当前跟踪的目标 face_id
@@ -105,17 +105,34 @@ class PerceptionVisualizerNode(Node):
         self.viz_pub = self.create_publisher(
             Image, self._output_topic, qos_sensor)
         
-        # 定时器
-        timer_period = 1.0 / self._publish_rate
-        self.timer = self.create_timer(timer_period, self._publish_visualization)
-        
-        self.get_logger().info(f"PerceptionVisualizerNode initialized")
+        self.get_logger().info(f"PerceptionVisualizerNode initialized (Sync Mode)")
         self.get_logger().info(f"  Image topic: {self._image_topic}")
         self.get_logger().info(f"  Output topic: {self._output_topic}")
-        self.get_logger().info(f"  Publish rate: {self._publish_rate} Hz")
+
+        # 调试统计
+        self._img_recv_count = 0
+        self._json_recv_count = 0
+        self._pub_count = 0
+        self._last_log_time = time.time()
+        self.create_timer(2.0, self._print_debug_status)
+
+    def _print_debug_status(self):
+        """定期打印调试状态"""
+        now = time.time()
+        if now - self._last_log_time > 5.0:
+            with self._data_lock:
+                 buf_size = len(self._image_buffer)
+                 latest_ts = self._image_buffer[-1][1] if self._image_buffer else 0.0
+            
+            self.get_logger().info(
+                f"[VizStatus] ImgRecv: {self._img_recv_count}, JSONRecv: {self._json_recv_count}, "
+                f"Pub: {self._pub_count}, BufSize: {buf_size}, LastImgTS: {latest_ts:.2f}"
+            )
+            self._last_log_time = now
     
     def _on_image(self, msg: Image):
         """处理相机图像"""
+        self._img_recv_count += 1
         if not CV_AVAILABLE:
             return
         
@@ -144,39 +161,94 @@ class PerceptionVisualizerNode(Node):
             
             cv_image = np.ascontiguousarray(cv_image)
             
+            # 获取时间戳
+            timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            
+            # [Fix for Sim] 如果 timestamp 为 0 (仿真环境可能未设置时间)，使用当前时间
+            # 这样才能与 PerceptionNode (同样fallback到当前时间) 进行匹配
+            if timestamp == 0.0:
+                timestamp = time.time()
+            
             with self._data_lock:
-                self._latest_image = cv_image
+                self._image_buffer.append((cv_image, timestamp))
                 
         except Exception as e:
             self.get_logger().error(f"Image conversion failed: {e}")
     
     def _on_faces(self, msg: String):
         """处理人脸检测结果"""
+        self._json_recv_count += 1
         try:
             data = json.loads(msg.data)
             faces_data = data.get('faces', [])
             
-            faces = []
-            for f in faces_data:
-                face = FaceInfo(
-                    x=f.get('x', 0.0),
-                    y=f.get('y', 0.0),
-                    width=f.get('width', 0.0),
-                    height=f.get('height', 0.0),
-                    is_frontal=f.get('is_frontal', False),
-                    yaw=f.get('yaw', 0.0),
-                    pitch=f.get('pitch', 0.0),
-                    roll=f.get('roll', 0.0),
-                    confidence=f.get('confidence', 0.0),
-                    face_id=f.get('face_id', -1),
-                )
-                faces.append(face)
+            try:
+                faces = []
+                for f in faces_data:
+                    face = FaceInfo(
+                        x=f.get('x', 0.0),
+                        y=f.get('y', 0.0),
+                        width=f.get('width', 0.0),
+                        height=f.get('height', 0.0),
+                        is_frontal=f.get('is_frontal', False),
+                        yaw=f.get('yaw', 0.0),
+                        pitch=f.get('pitch', 0.0),
+                        roll=f.get('roll', 0.0),
+                        confidence=f.get('confidence', 0.0),
+                        face_id=f.get('face_id', -1),
+                    )
+                    faces.append(face)
+            except Exception as e:
+                self.get_logger().error(f"Error creating FaceInfo objects: {e}")
+                return
+            
+            # 获取结果时间戳
+            faces_timestamp = data.get('timestamp', 0)
+            
+            matched_image = None
             
             with self._data_lock:
-                self._latest_faces = faces
+                # 检查 buffer 状态
+                if not self._image_buffer:
+                    if self._json_recv_count % 30 == 0:
+                        self.get_logger().warn("[Viz] Image buffer is empty! Cannot visualize.")
+                    return
+
+                # 在 buffer 中查找最接近的时间戳
+                best_diff = 0.1  # 最大允许误差 100ms
+                
+                # 倒序查找（优先匹配最新的）
+                for img, ts in reversed(self._image_buffer):
+                    diff = abs(ts - faces_timestamp)
+                    if diff < best_diff:
+                        best_diff = diff
+                        matched_image = img
+                        # 找到最佳匹配后可以停止吗？
+                        # 因为是倒序，越早遍历到的越新。
+                        # 如果 faces_timestamp 是旧的，我们应该找旧图。
+                        # 如果 buffer 是 [t1, t2, t3, t4]，faces 是 t3。
+                        # 倒序遍历：t4(diff大), t3(diff小), t2(diff大)...
+                        # 我们可以遍历整个 buffer 找最小值。
+                
+                # 如果没有精确的时间戳（旧版 perception_node），或者没匹配到
+                if matched_image is None and faces_timestamp <= 0 and self._image_buffer:
+                     # 使用最新的一帧
+                     matched_image = self._image_buffer[-1][0]
+                
+                # 如果仍未匹配到且 buffer 非空，但误差都太大？
+                # 这种情况下，为了避免无画面，可以使用最新帧，虽然会滞后。
+                if matched_image is None and self._image_buffer:
+                    matched_image = self._image_buffer[-1][0]
+
+            if matched_image is not None:
+                self._publish_visualization(matched_image, faces)
+            else:
+                 self.get_logger().warn("[Viz] Failed to match image for visualization")
                 
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse faces JSON: {e}")
+        except Exception as e:
+            self.get_logger().error(f"Unexpected error in _on_faces: {e}")
     
     def _on_state(self, msg: String):
         """处理 FSM 状态"""
@@ -198,14 +270,15 @@ class PerceptionVisualizerNode(Node):
             with self._data_lock:
                 self._target_face_id = None
     
-    def _publish_visualization(self):
-        """发布可视化图像"""
+    def _publish_visualization(self, image, faces):
+        """发布可视化图像 (事件驱动)"""
         if not CV_AVAILABLE:
             return
         
+        self._pub_count += 1
+        
         with self._data_lock:
-            image = self._latest_image
-            faces = self._latest_faces
+            # 状态信息仍然是最新的
             state = self._latest_state
             face_detected = self._latest_face_detected
             target_face_id = self._target_face_id

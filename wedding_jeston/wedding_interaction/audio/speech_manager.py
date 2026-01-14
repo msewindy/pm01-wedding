@@ -41,6 +41,13 @@ class SpeechItem:
     audio_file: Optional[str] = None # 音频文件路径（预录）
     priority: int = 0                # 优先级（越高越优先）
 
+    def __lt__(self, other):
+        # 优先级比较已经在 Queue 的 tuple 第一个元素 (-priority) 中处理了
+        # 这里只需要定义当优先级相同时的比较逻辑
+        # 我们简单地比较 ID 或者是创建时间（如果记录的话）
+        # 这里直接让其可比较即可，避免 TypeError
+        return self.id < other.id
+
 
 class SpeechManager:
     """
@@ -55,25 +62,18 @@ class SpeechManager:
     
     def __init__(
         self,
+        node_logger = None, # 接收 ROS logger
         audio_dir: Optional[str] = None,
         tts_enabled: bool = True,
-        tts_engine: str = "edge",  # "edge" | "piper" | "sherpa" | "mock"
+        tts_engine: str = "edge",
         tts_model: Optional[str] = None,
-        tts_voice: str = DEFAULT_TTS_CONFIG["voice"],  # Edge TTS 声音
-        tts_rate: str = DEFAULT_TTS_CONFIG["rate"],  # Edge TTS 语速
+        tts_voice: str = DEFAULT_TTS_CONFIG["voice"],
+        tts_rate: str = DEFAULT_TTS_CONFIG["rate"],
     ):
         """
         初始化语音管理器
-        
-        Args:
-            audio_dir: 预录音频目录
-            tts_enabled: 是否启用 TTS
-            tts_engine: TTS 引擎类型 ("edge" 推荐，与预录音频音色一致)
-            tts_model: TTS 模型路径（Piper/Sherpa 使用）
-            tts_voice: Edge TTS 声音
-            tts_rate: Edge TTS 语速
         """
-        self.logger = logging.getLogger("SpeechManager")
+        self.logger = node_logger if node_logger else logging.getLogger("SpeechManager")
         
         # 音频目录
         if audio_dir:
@@ -131,6 +131,8 @@ class SpeechManager:
             
             if audio_file:
                 self.logger.debug(f"Loaded prerecorded: {speech_id} -> {audio_file}")
+            else:
+                self.logger.warning(f"Missing audio file for '{speech_id}'. Will fallback to TTS.")
     
     def _find_audio_file(self, speech_id: str) -> Optional[str]:
         """查找预录音频文件（优先 MP3，因为 Edge TTS 生成的更自然）"""
@@ -313,7 +315,11 @@ class SpeechManager:
                 self.logger.warning(f"No suitable audio player found for {file_ext}")
                 return
             
-            self._current_process = subprocess.Popen(cmd)
+            self._current_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
             self._current_process.wait()
             
         except Exception as e:
@@ -339,6 +345,11 @@ class SpeechManager:
     
     def _play_with_edge_tts(self, text: str) -> None:
         """使用 Edge TTS 播放文本（推荐，与预录音频音色一致）"""
+        # 熔断检查
+        if not self.tts_enabled:
+            self.logger.warning(f"TTS is disabled (circuit breaker active). Skipping: {text[:10]}...")
+            return
+
         try:
             import edge_tts
             
@@ -371,10 +382,13 @@ class SpeechManager:
             
         except ImportError:
             self.logger.error("Edge TTS not installed. Install: pip install edge-tts")
+            self.tts_enabled = False
         except Exception as e:
-            self.logger.error(f"Edge TTS error: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
+            self.logger.error(f"Edge TTS connection/generation error: {e}")
+            self.logger.warning("Network issue detected. Disabling TTS to prevent further crashes.")
+            self.tts_enabled = False
+            # import traceback
+            # self.logger.error(traceback.format_exc())
     
     def _play_with_piper(self, text: str) -> None:
         """使用 Piper TTS"""

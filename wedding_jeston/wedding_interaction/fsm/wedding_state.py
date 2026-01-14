@@ -196,18 +196,38 @@ class WeddingState(ABC):
     
     def pid_follow_target_face(self, target_face: 'FaceInfo', log_prefix: str = "") -> None:
         """基于 PID 控制的跟随"""
-        import time
         from ..perception import FaceFollowingHelper
         
         camera = self.fsm.data.camera
         if not camera.is_valid():
             return
         
-        current_time = time.time()
+        # Use ROS Time (from FSM) instead of Wall Time (time.time())
+        # to match the timestamp source of perception data (ROS Message Header)
+        current_time = self.fsm.get_current_time()
         data_age = current_time - target_face.timestamp
-        MAX_DATA_AGE = 0.1
+        # 数据有效性检查
+        # 注意: PerceptionNode 现在发送的是 Image Capture Timestamp，包含了处理延时 (约50-100ms)
+        # 所以 MAX_DATA_AGE 需要足够大以容忍这个延时。
+        MAX_DATA_AGE = 0.5  # 500ms
         
         if data_age > MAX_DATA_AGE:
+            # 提升日志级别为 WARN 以便调试，并显示详细时间信息
+            # 提升日志级别为 WARN 以便调试，并显示详细时间信息
+            # [Fix] 发现时间戳存在~21s的系统性偏差，暂时禁用强制返回，只答应警告
+            # [Optimization] Throttle logging to avoid spam
+            current_time_now = self.fsm.get_current_time()
+            if not hasattr(self, '_last_data_age_warn_time'):
+                self._last_data_age_warn_time = 0.0
+            
+            if current_time_now - self._last_data_age_warn_time > 2.0:
+                self.logger.warning(
+                    f"{log_prefix} [数据过期] Age={data_age*1000:.1f}ms > Limit={MAX_DATA_AGE*1000:.0f}ms. "
+                    f"Curr={current_time:.3f}, Target={target_face.timestamp:.3f}. Ignoring check to force move."
+                )
+                self._last_data_age_warn_time = current_time_now
+            
+            # [Robustness] Enforce return on stale data to prevent jumps
             return
         
         target_x = target_face.center_x
@@ -216,11 +236,20 @@ class WeddingState(ABC):
         current_x = self.fsm.data.motion.look_at_target[0]
         current_y = self.fsm.data.motion.look_at_target[1]
         
+        # Calculate current angle errors first to support initialization
+        normalized_offset_x = target_x - 0.5
+        normalized_offset_y = target_y - 0.5
+        pixel_offset_x = FaceFollowingHelper.normalized_to_pixel_offset(normalized_offset_x, camera.width)
+        pixel_offset_y = FaceFollowingHelper.normalized_to_pixel_offset(normalized_offset_y, camera.height)
+        angle_error_x = FaceFollowingHelper.pixel_to_angle(pixel_offset_x, camera.fx)
+        angle_error_y = FaceFollowingHelper.pixel_to_angle(pixel_offset_y, camera.fy)
+
         if not hasattr(self, '_pid_integral_x'):
             self._pid_integral_x = 0.0
             self._pid_integral_y = 0.0
-            self._pid_last_error_x = 0.0
-            self._pid_last_error_y = 0.0
+            # Initialize last error to CURRENT error to prevent derivative spike (kick) on first frame
+            self._pid_last_error_x = angle_error_x
+            self._pid_last_error_y = angle_error_y
             self._last_pid_time = current_time
         
         if not hasattr(self, '_last_pid_time'):
@@ -232,6 +261,19 @@ class WeddingState(ABC):
         
         dt = 0.04 if actual_dt > 0.1 else actual_dt
         
+        # Get PID config
+        kp = self.fsm.data.config.get('pid_kp', 0.05)
+        ki = self.fsm.data.config.get('pid_ki', 0.0)
+        kd = self.fsm.data.config.get('pid_kd', 0.01)
+        
+        # [Fix] Clamp PID gains to prevent instability due to latency
+        kp = min(kp, 0.035)
+        kd = min(kd, 0.005)
+        
+        max_angle_change = self.fsm.data.config.get('pid_max_angle_change', 0.02)
+        approach_threshold = self.fsm.data.config.get('pid_approach_threshold', 0.10)
+        approach_damping = self.fsm.data.config.get('pid_approach_damping', 0.3)
+        
         new_x, new_y, new_integral_x, new_integral_y = FaceFollowingHelper.pid_follow(
             target_x, target_y,
             current_x, current_y,
@@ -241,18 +283,24 @@ class WeddingState(ABC):
             self._pid_last_error_x, self._pid_last_error_y,
             dt,
             logger=self.logger,
-            log_prefix=log_prefix
+            log_prefix=log_prefix,
+            kp=kp, ki=ki, kd=kd,
+            max_angle_change=max_angle_change,
+            approach_threshold=approach_threshold,
+            approach_damping=approach_damping
         )
+        
+        # Debug PID Output
+        if self.fsm.get_current_time() - getattr(self, '_last_pid_log_time', 0) > 1.0:
+            self._last_pid_log_time = self.fsm.get_current_time()
+            self.logger.debug(f"PID Debug: fx={camera.fx}, target_x={target_x:.3f}, current_x={current_x:.3f} -> new_x={new_x:.3f}")
+
         
         self._pid_integral_x = new_integral_x
         self._pid_integral_y = new_integral_y
         
-        normalized_offset_x = target_x - 0.5
-        normalized_offset_y = target_y - 0.5
-        pixel_offset_x = FaceFollowingHelper.normalized_to_pixel_offset(normalized_offset_x, camera.width)
-        pixel_offset_y = FaceFollowingHelper.normalized_to_pixel_offset(normalized_offset_y, camera.height)
-        angle_error_x = FaceFollowingHelper.pixel_to_angle(pixel_offset_x, camera.fx)
-        angle_error_y = FaceFollowingHelper.pixel_to_angle(pixel_offset_y, camera.fy)
+        # Error calculation moved up for initialization
+        # Updates for next iteration
         self._pid_last_error_x = angle_error_x
         self._pid_last_error_y = angle_error_y
         

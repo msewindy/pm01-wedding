@@ -64,6 +64,12 @@ def generate_launch_description():
         default_value='true',
         description='Enable perception visualization'
     )
+
+    enable_realsense_arg = DeclareLaunchArgument(
+        'enable_realsense',
+        default_value='true',
+        description='Enable RealSense camera publisher'
+    )
     
     # 各节点独立的日志级别参数
     perception_node_log_level_arg = DeclareLaunchArgument(
@@ -74,7 +80,7 @@ def generate_launch_description():
     
     fsm_node_log_level_arg = DeclareLaunchArgument(
         'fsm_node_log_level',
-        default_value='info',
+        default_value='warn',
         description='Log level for wedding_fsm_node (debug, info, warn, error, fatal)'
     )
     
@@ -96,10 +102,25 @@ def generate_launch_description():
         description='Log level for perception_visualizer_node (debug, info, warn, error, fatal)'
     )
     
+    realsense_log_level_arg = DeclareLaunchArgument(
+        'realsense_log_level',
+        default_value='warn',
+        description='Log level for realsense_publisher_node (debug, info, warn, error, fatal)'
+    )
+    
+
+    
     # 音频资源目录
     audio_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         'audio_resources'
+    )
+    
+    # Config file
+    config_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'config',
+        'parameters.yaml'
     )
     
     return LaunchDescription([
@@ -110,22 +131,42 @@ def generate_launch_description():
         image_topic_arg,
         enable_action_arg,
         enable_speech_arg,
+        enable_realsense_arg,
         enable_visualization_arg,
         perception_node_log_level_arg,
         fsm_node_log_level_arg,
         motion_adapter_log_level_arg,
         speech_player_log_level_arg,
         perception_visualizer_log_level_arg,
+        realsense_log_level_arg,
         
         # 日志
         LogInfo(msg=['Starting Interview test environment...']),
         LogInfo(msg=['FSM rate: ', LaunchConfiguration('fsm_rate'), ' Hz']),
         LogInfo(msg=['Image topic: ', LaunchConfiguration('image_topic')]),
+        LogInfo(msg=['RealSense enabled: ', LaunchConfiguration('enable_realsense')]),
         LogInfo(msg=['Perception node log level: ', LaunchConfiguration('perception_node_log_level')]),
         LogInfo(msg=['FSM node log level: ', LaunchConfiguration('fsm_node_log_level')]),
         LogInfo(msg=['Motion adapter log level: ', LaunchConfiguration('motion_adapter_log_level')]),
         LogInfo(msg=['Speech player log level: ', LaunchConfiguration('speech_player_log_level')]),
         LogInfo(msg=['Perception visualizer log level: ', LaunchConfiguration('perception_visualizer_log_level')]),
+        LogInfo(msg=['RealSense log level: ', LaunchConfiguration('realsense_log_level')]),
+        
+        # RealSense 发布节点 (可选)
+        Node(
+            package='wedding_interaction',
+            executable='realsense_publisher',
+            name='realsense_publisher_node',
+            output='screen',
+            arguments=['--ros-args', '--log-level', LaunchConfiguration('realsense_log_level')],
+            parameters=[config_file, {
+                'topic_name': LaunchConfiguration('image_topic'),
+                # 'fps': 30,
+                # 'width': 640,
+                # 'height': 480
+            }],
+            condition=IfCondition(LaunchConfiguration('enable_realsense')),
+        ),
         
         # 感知节点
         Node(
@@ -134,12 +175,9 @@ def generate_launch_description():
             name='perception_node',
             output='screen',
             arguments=['--ros-args', '--log-level', LaunchConfiguration('perception_node_log_level')],
-            parameters=[{
+            parameters=[config_file, {
                 'use_usb_camera': LaunchConfiguration('use_usb_camera'),
                 'image_topic': LaunchConfiguration('image_topic'),
-                'detection_rate': 30.0,
-                'use_face_mesh': True,
-                'model_selection': 0,
             }],
         ),
         
@@ -150,7 +188,7 @@ def generate_launch_description():
             name='wedding_fsm_node',
             output='screen',
             arguments=['--ros-args', '--log-level', LaunchConfiguration('fsm_node_log_level')],
-            parameters=[{
+            parameters=[config_file, {
                 'fsm_rate': LaunchConfiguration('fsm_rate'),
                 'initial_state': 'IDLE',
                 'enable_action': LaunchConfiguration('enable_action'),
@@ -165,12 +203,8 @@ def generate_launch_description():
             name='motion_adapter_node',
             output='screen',
             arguments=['--ros-args', '--log-level', LaunchConfiguration('motion_adapter_log_level')],
-            parameters=[{
+            parameters=[config_file, {
                 'control_rate': LaunchConfiguration('control_rate'),
-                'head_max_vel': 1.5,
-                'head_max_acc': 5.0,
-                'waist_max_vel': 1.0,
-                'waist_max_acc': 4.0,
             }],
         ),
         
@@ -181,12 +215,8 @@ def generate_launch_description():
             name='speech_player_node',
             output='screen',
             arguments=['--ros-args', '--log-level', LaunchConfiguration('speech_player_log_level')],
-            parameters=[{
+            parameters=[config_file, {
                 'audio_dir': audio_dir,
-                'tts_enabled': True,
-                'tts_engine': 'edge',  # 使用 edge-tts 以匹配预录音频音色
-                'tts_voice': 'zh-CN-XiaoxiaoNeural',  # 与 generate_audio.py 一致
-                'tts_rate': '+0%',
             }],
         ),
         
@@ -197,10 +227,9 @@ def generate_launch_description():
             name='perception_visualizer_node',
             output='screen',
             arguments=['--ros-args', '--log-level', LaunchConfiguration('perception_visualizer_log_level')],
-            parameters=[{
+            parameters=[config_file, {
                 'image_topic': LaunchConfiguration('image_topic'),
                 'output_topic': '/wedding/perception/visualization',
-                'publish_rate': 30.0,
             }],
             condition=IfCondition(LaunchConfiguration('enable_visualization')),
         ),

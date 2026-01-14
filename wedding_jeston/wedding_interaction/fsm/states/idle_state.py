@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Optional, List
 
 from ..enums import WeddingStateName
 from ..wedding_state import WeddingState
+from ...config.action_resources import ACTION_PACKS
 
 if TYPE_CHECKING:
     from ..wedding_fsm import WeddingFSM
@@ -27,17 +28,22 @@ class IdleState(WeddingState):
     
     # ========== 配置参数 ==========
     
-    # 动作切换参数
-    SWITCH_INTERVAL_MIN = 10.0
-    SWITCH_INTERVAL_MAX = 20.0
-    GREETING_PROBABILITY = 0.3    # 切换时执行打招呼的动作概率
-    
-    # 目标检测参数
-    FACE_CONFIRM_TIME = 0.5       # 候选确认时间（秒）
-    FACE_LOST_TOLERANCE = 0.2     # 候选丢失容忍时间（秒）
-    
     def __init__(self, fsm: 'WeddingFSM'):
         super().__init__(fsm, WeddingStateName.IDLE)
+        
+        # Load params from config
+        config = self.fsm.data.config or {}
+        
+        # 动作切换参数
+        self.switch_interval_min = config.get('idle_switch_interval_min', 10.0)
+        self.switch_interval_max = config.get('idle_switch_interval_max', 20.0)
+        self.greeting_probability = config.get('idle_greeting_probability', 0.3)
+        self.observe_duration_min = config.get('idle_observe_duration_min', 3.0)
+        self.observe_duration_max = config.get('idle_observe_duration_max', 5.0)
+        
+        # 目标检测参数
+        self.face_confirm_time = config.get('idle_face_confirm_time', 0.5)
+        self.face_lost_tolerance = config.get('idle_face_lost_tolerance', 0.2)
         
         # 切换控制
         self._next_switch_time = 0.0
@@ -52,12 +58,37 @@ class IdleState(WeddingState):
         self.iter_count = 0
         self.enter_time = self.fsm.get_current_time()
         
-        # 重置候选
+        # 初始进入 Active 阶段
+        self._current_phase = "active"
+        
+        # 必须重置候选状态，防止从 SEARCH 返回时保留了旧的 candidate
         self._reset_candidate()
         
-        # 初始动作：普通闲聊/摆动
-        self.execute_action("idle_normal")
-        self._schedule_next_switch()
+        self._enter_active_phase()
+        
+    def _enter_active_phase(self):
+        """进入活跃动作阶段"""
+        self.execute_action("idle_normal") # 默认动作
+        
+        # 设定下一次切换时间 (10~20s)
+        # 这里的 switch 指 Active -> Observe 的切换，或者是 Active 内部动作变换（如果需要）
+        # 这里简化为：Active 持续一段时间后，切入 Observe
+        # 这里简化为：Active 持续一段时间后，切入 Observe
+        interval = random.uniform(self.switch_interval_min, self.switch_interval_max)
+        self._next_switch_time = self.fsm.get_current_time() + interval
+        self.log(f"Phase: ACTIVE. Next switch in {interval:.1f}s")
+
+    def _enter_observe_phase(self):
+        """进入静止观察阶段"""
+        self.execute_action("idle_observe")
+        
+        # 观察持续 3~5 秒
+        observe_duration = random.uniform(self.observe_duration_min, self.observe_duration_max)
+        self._next_switch_time = self.fsm.get_current_time() + observe_duration
+        self.log(f"Phase: OBSERVE. Duration {observe_duration:.1f}s")
+        
+        # 重置候选
+        self._reset_candidate()
         
     def _reset_candidate(self) -> None:
         """重置候选目标状态"""
@@ -72,25 +103,57 @@ class IdleState(WeddingState):
         self._next_switch_time = self.fsm.get_current_time() + interval
         
     def run(self) -> None:
-        """执行待机逻辑"""
+        """
+        空闲状态主循环
+        逻辑：
+        1. 阶段切换 (Active <-> Observe)
+        2. 候选人脸检测与确认 -> 切换 SEARCH
+        """
+        self.iter_count += 1
         current_time = self.fsm.get_current_time()
         
-        # 1. 动作切换逻辑
+        # 1. 阶段/动作切换逻辑
         if current_time >= self._next_switch_time:
-            # 随机决定是普通摆动还是打招呼
-            if random.random() < self.GREETING_PROBABILITY:
-                self.execute_action("greeting")
-                self.log("Switching to action: greeting")
+            if self._current_phase == "active":
+                # Active -> Observe
+                self._current_phase = "observe"
+                self._enter_observe_phase()
             else:
-                self.execute_action("idle_normal")
-                self.log("Switching to action: idle_normal")
-            
-            self._schedule_next_switch()
+                # Observe -> Active
+                self._current_phase = "active"
+                
+                # Active 开始时，随机选择动作
+                # 设定 Active 持续时间
+                duration = 0.0
+                
+                # Check for explicit duration in action config
+                # TODO: execute_action could return config, but for now we look it up
+                # Note: execute_action handles the actual execution.
+                
+                # Active 开始时，随机选择动作
+                action_name = "idle_normal"
+                if random.random() < self.greeting_probability:
+                    action_name = "greeting"
+                    self.execute_action(action_name)
+                    self.log("Action: greeting")
+                else:
+                    action_name = "idle_normal"
+                    self.execute_action(action_name)
+                    self.log("Action: idle_normal")
+                
+                # Determine duration
+                if action_name in ACTION_PACKS and 'duration' in ACTION_PACKS[action_name]:
+                    duration = ACTION_PACKS[action_name]['duration']
+                    self.log(f"Using defined duration: {duration}s")
+                else:
+                    duration = random.uniform(self.switch_interval_min, self.switch_interval_max)
+                
+                self._next_switch_time = current_time + duration
+                self.log(f"Phase: ACTIVE. Next switch in {duration:.1f}s")
         
         # 2. 目标检测逻辑
-        self._update_candidate(current_time)
-        
-        self.iter_count += 1
+        if self._current_phase == "observe":
+            self._update_candidate(current_time)
         
     def _update_candidate(self, current_time: float):
         """更新候选检测"""
@@ -120,7 +183,7 @@ class IdleState(WeddingState):
         else:
             # 丢失
             lost_duration = current_time - self._candidate_last_seen
-            if lost_duration > self.FACE_LOST_TOLERANCE:
+            if lost_duration > self.face_lost_tolerance:
                 self.log(f"Candidate lost (duration: {lost_duration:.1f}s)")
                 self._reset_candidate()
     
@@ -137,7 +200,7 @@ class IdleState(WeddingState):
             # 排除最后一次看到后的丢失时间
             effective_duration = confirm_duration - (current_time - self._candidate_last_seen)
             
-            if effective_duration >= self.FACE_CONFIRM_TIME:
+            if effective_duration >= self.face_confirm_time:
                 self.log(f"Candidate confirmed ({effective_duration:.2f}s). Proceeding to SEARCH.")
                 
                 # 保存目标信息到 LockedTarget (供 SEARCH/TRACKING 使用)
@@ -150,4 +213,5 @@ class IdleState(WeddingState):
         return self.state_name
 
     def on_exit(self) -> None:
+        self.stop_action()
         self.log("Exiting IDLE state")

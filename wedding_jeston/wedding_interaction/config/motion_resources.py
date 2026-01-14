@@ -8,25 +8,28 @@
 # Value: {joint_idx: angle, ...}
 
 POSES = {
-    # 自然垂下
+    # 自然垂下 (Hands down)
     "neutral": {
-        13: 0.0, 14: 0.0, 15: 0.0, 16: 0.0
+        13: 0.0, 14: 0.0, 15: 0.0, 16: 0.0, 17: 0.0, # Left Arm
+        18: 0.0, 19: 0.0, 20: 0.0, 21: 0.0, 22: 0.0  # Right Arm
     },
     
-    # 举麦克风 (右手)
+    # 举麦克风 (左手 - J13-J17)
     "mic_hold": {
-        13: -0.5, # R_SHOULDER_PITCH (抬起)
-        14: -0.2, # R_SHOULDER_ROLL (外展)
-        15: 0.0,  # R_ELBOW_YAW
-        16: -1.2  # R_ELBOW_PITCH (弯曲)
+        13: -0.5, # L_SHOULDER_PITCH (抬起)
+        14: 0.2,  # L_SHOULDER_ROLL (外展 - 注意符号可能需反转)
+        15: 0.0,  # L_SHOULDER_YAW
+        16: -1.2, # L_ELBOW_PITCH (弯曲)
+        17: 0.0   # L_ELBOW_YAW
     },
     
-    # 挥手准备 (举起手臂)
+    # 挥手准备 (右手 - J18-J22)
     "wave_start": {
-        13: -1.5, # R_SHOULDER_PITCH (高举)
-        14: 0.0,
-        15: 0.0,
-        16: -0.5  # R_ELBOW_PITCH (微弯)
+        18: -1.5, # R_SHOULDER_PITCH (高举)
+        19: 0.0,  # R_SHOULDER_ROLL
+        20: 0.0,  # R_SHOULDER_YAW
+        21: -0.5, # R_ELBOW_PITCH (微弯)
+        22: 0.0   # R_ELBOW_YAW
     }
 }
 
@@ -45,12 +48,12 @@ MOTIONS = {
         "phase_diff": 0.5  # 相位差
     },
     
-    # 挥手 (Wave)
+    # 挥手 (Right Wave)
     "wave_greet": {
         "type": "wave",
         "period": 1.0,     # 挥手周期
-        "arm_amp": 0.3,    # 手臂摆动幅度 (SHOULDER_ROLL or ELBOW)
-        "joint_idx": 14    # 主要挥动关节 (e.g. 14=Roll)
+        "arm_amp": 0.3,    # 手臂摆动幅度
+        "joint_idx": 19    # R_SHOULDER_ROLL (右手Roll)
     },
     
     # 环境扫描 (Scan)

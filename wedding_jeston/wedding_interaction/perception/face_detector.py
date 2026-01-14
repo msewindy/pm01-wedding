@@ -60,9 +60,17 @@ class FaceDetector:
                  use_face_mesh: bool = True,
                  min_detection_confidence: float = 0.5,
                  min_tracking_confidence: float = 0.5,
+                 frontal_yaw_threshold: float = 30.0,
+                 frontal_pitch_threshold: float = 20.0,
+                 tracker_iou_threshold: float = 0.15,
+                 tracker_distance_threshold: float = 0.30,
+                 tracker_max_time_since_seen: float = 5.0,
                  model_selection: int = 0,
+
                  force_opencv: bool = False,  # 默认使用 MediaPipe
-                 enable_tracking: bool = True):  # 启用 ID 追踪
+                 enable_tracking: bool = True, # 启用 ID 追踪
+                 min_face_size: float = 0.05, # 最小人脸尺寸 (相对于图像宽度的比例，0.0-1.0)
+                 logger = None): # 接收 ROS logger
         """
         初始化人脸检测器
         
@@ -73,17 +81,27 @@ class FaceDetector:
             model_selection: 模型选择 (0: 近距离 2m, 1: 远距离 5m)
             force_opencv: 强制使用 OpenCV Haar Cascade (对小人脸检测更稳定)
             enable_tracking: 是否启用跨帧 ID 追踪（使用 FaceIDTracker）
+            min_face_size: 最小人脸尺寸 (宽或高占图像的比例)，过滤过小的误检
+            logger: ROS2 logger 对象
         """
-        self.logger = logging.getLogger("FaceDetector")
+        self.logger = logger if logger else logging.getLogger("FaceDetector")
         self._use_face_mesh = use_face_mesh
         self._min_detection_confidence = min_detection_confidence
         self._min_tracking_confidence = min_tracking_confidence
+        self._frontal_yaw_threshold = frontal_yaw_threshold
+        self._frontal_pitch_threshold = frontal_pitch_threshold
         self._model_selection = model_selection
         self._force_opencv = force_opencv
         self._enable_tracking = enable_tracking
+        self._min_face_size = min_face_size
         
         # ID 追踪器（用于维护跨帧持久化 ID）
-        self._id_tracker = FaceIDTracker() if enable_tracking else None
+        self._id_tracker = FaceIDTracker(
+            logger=self.logger, # 传递 logger
+            iou_threshold=tracker_iou_threshold,
+            distance_threshold=tracker_distance_threshold,
+            max_time_since_seen=tracker_max_time_since_seen
+        ) if enable_tracking else None
         
         # MediaPipe 组件
         self._face_detector = None
@@ -274,9 +292,30 @@ class FaceDetector:
         else:
             faces = self._detect_tasks(image)
         
-        # 记录检测结果（追踪前）
+        # 记录原始检测结果
         if len(faces) > 0:
-            self.logger.debug(f"[FaceDetector] 检测到{len(faces)}个人脸（追踪前）:")
+            self.logger.debug(f"[FaceDetector] Raw detections: {len(faces)}")
+
+        # 过滤: 尺寸过小 + 置信度过低
+        valid_faces = []
+        for face in faces:
+            # 1. 尺寸过滤
+            if face.width < self._min_face_size and face.height < self._min_face_size:
+                self.logger.debug(f"Filtered small face: size=({face.width:.3f}, {face.height:.3f}) < {self._min_face_size}")
+                continue
+            
+            # 2. 置信度过滤 (OpenCV Haar 默认 0.8, 如果设为 0.9 将被过滤)
+            if face.confidence < self._min_detection_confidence:
+                self.logger.debug(f"Filtered low confidence face: conf={face.confidence:.3f} < {self._min_detection_confidence}")
+                continue
+                
+            valid_faces.append(face)
+        
+        faces = valid_faces
+        
+        # 记录过滤后结果
+        if len(faces) > 0:
+            self.logger.debug(f"[FaceDetector] After filtering: {len(faces)}")
             for i, face in enumerate(faces):
                 self.logger.debug(f"  [{i}] bbox=({face.x:.3f}, {face.y:.3f}, {face.width:.3f}, {face.height:.3f}), "
                                 f"center=({face.center_x:.3f}, {face.center_y:.3f}), "
@@ -542,8 +581,8 @@ class FaceDetector:
         
         # 正脸判断
         face.is_frontal = (
-            abs(face.yaw) < self.FRONTAL_YAW_THRESHOLD and
-            abs(face.pitch) < self.FRONTAL_PITCH_THRESHOLD
+            abs(face.yaw) < self._frontal_yaw_threshold and
+            abs(face.pitch) < self._frontal_pitch_threshold
         )
     
     def _match_faces_by_iou(self, faces: List[FaceInfo], 

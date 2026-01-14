@@ -12,9 +12,10 @@ import json
 import logging
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy, qos_profile_sensor_data
 from std_msgs.msg import String, Bool
 from geometry_msgs.msg import PointStamped
+import numpy as np
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import CameraInfo, Image
 import numpy as np
@@ -34,9 +35,6 @@ from ..fsm.states import (
     IdleState,
     SearchState,
     TrackingState,
-    PhotoPosingState,
-    FarewellState,
-    SafeStopState,
     InterviewState,
 )
 from ..action_pack.action_manager import ActionManager
@@ -97,25 +95,121 @@ class WeddingFSMNode(Node):
         
         # 声明参数
         self.declare_parameter('fsm_rate', 25.0)  # FSM 运行频率 Hz
-        self.declare_parameter('state_pub_rate', 5.0)  # 状态发布频率 Hz
-        self.declare_parameter('enable_action', True)  # 启用动作执行
-        self.declare_parameter('enable_speech', True)  # 启用语音播放
+        # FSM Rate
+        self.declare_parameter('state_pub_rate', 5.0)
         
+        # Global Config
+        self.declare_parameter('enable_action', True)
+        self.declare_parameter('enable_speech', True)
+        self.declare_parameter('audio_dir', '')
+
+        # Idle Params
+        self.declare_parameter('idle_switch_interval_min', 10.0)
+        self.declare_parameter('idle_switch_interval_max', 20.0)
+        self.declare_parameter('idle_greeting_probability', 0.3)
+        self.declare_parameter('idle_observe_duration_min', 3.0)
+        self.declare_parameter('idle_observe_duration_max', 5.0)
+        self.declare_parameter('idle_face_confirm_time', 0.5)
+        self.declare_parameter('idle_face_lost_tolerance', 0.2)
+        
+        # Tracking Params
+        # Tracking Params
+        self.declare_parameter('tracking_lost_timeout', 5.0)
+        # REMOVED: self.declare_parameter('tracking_match_distance_threshold', 0.2)
+        self.declare_parameter('tracking_stable_duration', 2.0)
+        self.declare_parameter('tracking_auto_interview_duration', 1.5)
+        self.declare_parameter('tracking_interview_trigger_min_lost', 0.5)
+        self.declare_parameter('tracking_interview_trigger_max_lost', 1.5)
+        # REMOVED: self.declare_parameter('tracking_idle_trigger_lost_time', 2.0)
+        
+        # Search Params
+        self.declare_parameter('search_face_confirm_time', 2.0)
+        self.declare_parameter('search_timeout', 10.0)
+        self.declare_parameter('search_no_target_timeout', 5.0)
+
+        # Interview Params
+        self.declare_parameter('interview_greeting_duration', 3.0)
+        self.declare_parameter('interview_question_duration', 2.0)
+        self.declare_parameter('interview_listening_timeout', 8.0)
+        self.declare_parameter('interview_silence_threshold', 1.5)
+        self.declare_parameter('interview_ending_duration', 2.0)
+        self.declare_parameter('interview_done_duration', 1.0)
+        self.declare_parameter('interview_voice_threshold', 0.02)
+        # REMOVED: self.declare_parameter('interview_match_distance_threshold', 0.2)
+        
+        # PID Control
+        self.declare_parameter('pid_kp', 0.03)
+        self.declare_parameter('pid_ki', 0.0)
+        self.declare_parameter('pid_kd', 0.002)
+        self.declare_parameter('pid_max_angle_change', 0.02)
+        self.declare_parameter('pid_approach_threshold', 0.10)
+        self.declare_parameter('pid_approach_damping', 0.3)
+        
+        # Face Tracker Params
+        self.declare_parameter('face_tracker_pos_match_threshold', 0.3)
+        
+        # Load local variables for timer init
         fsm_rate = self.get_parameter('fsm_rate').value
         state_pub_rate = self.get_parameter('state_pub_rate').value
-        enable_action = self.get_parameter('enable_action').value
-        enable_speech = self.get_parameter('enable_speech').value
+
+        # Load all into config dict
+        fsm_config = {
+            'enable_action': self.get_parameter('enable_action').value,
+            'enable_speech': self.get_parameter('enable_speech').value,
+            'audio_dir': self.get_parameter('audio_dir').value,
+            
+            # Idle
+            'idle_switch_interval_min': self.get_parameter('idle_switch_interval_min').value,
+            'idle_switch_interval_max': self.get_parameter('idle_switch_interval_max').value,
+            'idle_greeting_probability': self.get_parameter('idle_greeting_probability').value,
+            'idle_observe_duration_min': self.get_parameter('idle_observe_duration_min').value,
+            'idle_observe_duration_max': self.get_parameter('idle_observe_duration_max').value,
+            'idle_face_confirm_time': self.get_parameter('idle_face_confirm_time').value,
+            'idle_face_lost_tolerance': self.get_parameter('idle_face_lost_tolerance').value,
+            
+            # Tracking
+            # Tracking
+            'tracking_lost_timeout': self.get_parameter('tracking_lost_timeout').value,
+            # 'tracking_match_distance_threshold': self.get_parameter('tracking_match_distance_threshold').value,
+            'tracking_stable_duration': self.get_parameter('tracking_stable_duration').value,
+            'tracking_auto_interview_duration': self.get_parameter('tracking_auto_interview_duration').value,
+            'tracking_interview_trigger_min_lost': self.get_parameter('tracking_interview_trigger_min_lost').value,
+            'tracking_interview_trigger_max_lost': self.get_parameter('tracking_interview_trigger_max_lost').value,
+            # 'tracking_idle_trigger_lost_time': self.get_parameter('tracking_idle_trigger_lost_time').value,
+            
+            # Search
+            'search_face_confirm_time': self.get_parameter('search_face_confirm_time').value,
+            'search_timeout': self.get_parameter('search_timeout').value,
+            'search_no_target_timeout': self.get_parameter('search_no_target_timeout').value,
+            
+            # Interview
+            'interview_greeting_duration': self.get_parameter('interview_greeting_duration').value,
+            'interview_question_duration': self.get_parameter('interview_question_duration').value,
+            'interview_listening_timeout': self.get_parameter('interview_listening_timeout').value,
+            'interview_silence_threshold': self.get_parameter('interview_silence_threshold').value,
+            'interview_ending_duration': self.get_parameter('interview_ending_duration').value,
+            'interview_done_duration': self.get_parameter('interview_done_duration').value,
+            'interview_voice_threshold': self.get_parameter('interview_voice_threshold').value,
+            # 'interview_match_distance_threshold': self.get_parameter('interview_match_distance_threshold').value,
+            
+            # PID
+            'pid_kp': self.get_parameter('pid_kp').value,
+            'pid_ki': self.get_parameter('pid_ki').value,
+            'pid_kd': self.get_parameter('pid_kd').value,
+            'pid_max_angle_change': self.get_parameter('pid_max_angle_change').value,
+            'pid_approach_threshold': self.get_parameter('pid_approach_threshold').value,
+            'pid_approach_damping': self.get_parameter('pid_approach_damping').value,
+            
+            # Face Tracker
+            'face_tracker_pos_match_threshold': self.get_parameter('face_tracker_pos_match_threshold').value,
+        }
         
-        self.get_logger().info(f"Action enabled: {enable_action}, Speech enabled: {enable_speech}")
+        self.get_logger().info(f"FSM Config Loaded: {fsm_config}")
         
         # 初始化 ActionManager
         self.action_manager = ActionManager(self)
         
         # 创建 FSM（传入配置、ROS2 logger 和 ActionManager）
-        fsm_config = {
-            'enable_action': enable_action,
-            'enable_speech': enable_speech,
-        }
         # 传递 ROS2 logger 给 FSM，这样状态类可以使用 ROS2 logger
         ros2_logger = self.get_logger()
         self.fsm = WeddingFSM(config=fsm_config, ros2_logger=ros2_logger, action_manager=self.action_manager)
@@ -124,9 +218,6 @@ class WeddingFSMNode(Node):
         self.fsm.register_state(IdleState(self.fsm))
         self.fsm.register_state(SearchState(self.fsm))
         self.fsm.register_state(TrackingState(self.fsm))
-        self.fsm.register_state(PhotoPosingState(self.fsm))
-        self.fsm.register_state(FarewellState(self.fsm))
-        self.fsm.register_state(SafeStopState(self.fsm))
         self.fsm.register_state(InterviewState(self.fsm))
         
         # 初始化 FSM
@@ -139,7 +230,25 @@ class WeddingFSMNode(Node):
             depth=1
         )
         
+        
+        # System Ready Flag
+        self._system_ready = False
+        
         # ========== 订阅者 ==========
+        
+        # 监听系统就绪信号 (Transient Local to catch latched message)
+        qos_latching = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        self.ready_sub = self.create_subscription(
+            Bool,
+            '/wedding/system/ready',
+            self._on_system_ready,
+            qos_latching
+        )
         
         # 感知数据：手势
         self.gesture_sub = self.create_subscription(
@@ -180,7 +289,7 @@ class WeddingFSMNode(Node):
             CameraInfo,
             '/camera/head/camera_info',
             self._on_camera_info,
-            10
+            qos_profile_sensor_data
         )
         self.get_logger().info("Subscribing to /camera/head/camera_info for PID following")
         
@@ -282,7 +391,14 @@ class WeddingFSMNode(Node):
         self.get_logger().info("WeddingFSMNode initialized")
         self.get_logger().info(f"FSM rate: {fsm_rate} Hz, State pub rate: {state_pub_rate} Hz")
     
+    def _on_system_ready(self, msg: Bool) -> None:
+        """从 MotionAdapter 接收系统就绪信号"""
+        if msg.data:
+            self._system_ready = True
+            self.get_logger().info("System READY signal received. FSM logic enabled.")
+    
     # ========== 感知回调 ==========
+    
     
     def _on_gesture(self, msg: String) -> None:
         """处理手势"""
@@ -331,9 +447,9 @@ class WeddingFSMNode(Node):
             # 记录接收到的face_id信息（用于调试face_id变化）
             if faces:
                 face_ids = [f.face_id for f in faces]
-                self.get_logger().info(f"[FSMNode] 接收到 {len(faces)} 个人脸, IDs={face_ids}:")
+                self.get_logger().debug(f"[FSMNode] 接收到 {len(faces)} 个人脸, IDs={face_ids}:")
                 for i, face in enumerate(faces):
-                    self.get_logger().info(
+                    self.get_logger().debug(
                         f"  face[{i}]: id={face.face_id}, "
                         f"pos=({face.center_x:.4f}, {face.center_y:.4f}), "
                         f"frontal={face.is_frontal}, "
@@ -374,12 +490,15 @@ class WeddingFSMNode(Node):
         """处理相机信息"""
         self.fsm.data.camera.update_from_camera_info(msg)
         # 只在首次接收时记录日志
-        if not hasattr(self, '_camera_info_logged'):
+        # 定期日志 (每3秒)
+        now = self.get_clock().now().nanoseconds / 1e9
+        if not hasattr(self, '_last_cam_log'): self._last_cam_log = 0.0
+        if now - self._last_cam_log > 3.0:
             self.get_logger().info(
                 f"Camera info received: fx={self.fsm.data.camera.fx:.1f}, "
-                f"fy={self.fsm.data.camera.fy:.1f}, "
                 f"size={self.fsm.data.camera.width}x{self.fsm.data.camera.height}"
             )
+            self._last_cam_log = now
             self._camera_info_logged = True
     
     def _on_image(self, msg: Image) -> None:
@@ -474,6 +593,10 @@ class WeddingFSMNode(Node):
     
     def _run_fsm(self) -> None:
         """FSM 主循环"""
+        if not self._system_ready:
+            # 等待 MotionAdapter 初始化完毕
+            return
+
         # 运行 FSM
         self.fsm.run_once()
         

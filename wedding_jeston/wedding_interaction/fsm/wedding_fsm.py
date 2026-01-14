@@ -12,6 +12,7 @@ from typing import Dict, Optional, Callable, List
 from .enums import WeddingStateName, FSMOperatingMode, WeddingEvent
 from .wedding_state import WeddingState, TransitionData
 from .wedding_fsm_data import WeddingFSMData
+from ..perception import FaceTracker
 
 
 class WeddingFSM:
@@ -23,6 +24,7 @@ class WeddingFSM:
     - 执行状态转换逻辑
     - 运行主控制循环
     - 提供对外接口
+    - 维护全局跟踪器 (FaceTracker)
     
     参考：engineai_humanoid/FSM_States/ControlFSM.h
     """
@@ -46,6 +48,14 @@ class WeddingFSM:
         self.data = WeddingFSMData()
         if config:
             self.data.config = config
+            
+        # 全局跟踪器
+        self.face_tracker = FaceTracker(logger=self.logger)
+        if config:
+             # Apply global config defaults
+             self.face_tracker.configure(
+                 pos_match_threshold=config.get('face_tracker_pos_match_threshold')
+             )
         
         # 状态列表
         self.states: Dict[WeddingStateName, WeddingState] = {}

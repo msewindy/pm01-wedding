@@ -86,10 +86,10 @@ class ActionManager:
             self.node.get_logger().error(f"Action '{action_name}' not found!")
             return None
         
-        # 如果是同一个动作包，且不需要强制重置?
-        # 目前策略：每次 execute_action 都重置状态 (re-enter)
-        # 如果需要保持周期性语音的节奏不被打断，可以判断 action_name == current.name
-        # 但 FSM 通常在 enter 或者 switch 时调用，因此重置是合理的
+        if self.current_action and self.current_action.name == action_name:
+            # Action already running, update timestamp or just continue?
+            # To avoid log spam, we just return the strategy or continue logic without logging
+            return self.current_action.pack.get('motion_strategy', 'stop')
         
         pack = ACTION_PACKS[action_name]
         self.enable_speech = enable_speech
@@ -170,9 +170,31 @@ class ActionManager:
             
             # 执行播放
             if should_play:
+                # 检查概率 (如果配置了)
+                probability = config.get('probability', 1.0)
+                if random.random() > probability:
+                    should_play = False
+                    # 即使不播放，如果是 periodic 模式，通过前面的逻辑已经调度了下一次时间
+                    # 所以这里不需要额外处理，直接跳过本次
+                    if mode == 'periodic':
+                        pass # 下一次时间已经设置好了
+                
+            if should_play:
                 speech_group = state.pack.get('speech_group')
                 if speech_group and len(speech_group) > 0:
-                    speech_id = random.choice(speech_group)
+                    # Shuffle Bag Logic
+                    if not hasattr(state, '_speech_bag') or not state._speech_bag:
+                        state._speech_bag = list(speech_group)
+                        random.shuffle(state._speech_bag)
+                        # 避免重置后第一个和上一次最后一个相同 (仅当 group > 1)
+                        if len(speech_group) > 1 and hasattr(state, '_last_speech'):
+                            if state._speech_bag[0] == state._last_speech:
+                                # 简单交换前两个
+                                state._speech_bag[0], state._speech_bag[1] = state._speech_bag[1], state._speech_bag[0]
+
+                    speech_id = state._speech_bag.pop(0)
+                    state._last_speech = speech_id
+                    
                     msg = String()
                     msg.data = speech_id
                     self.speech_pub.publish(msg)

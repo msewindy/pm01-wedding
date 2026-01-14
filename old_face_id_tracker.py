@@ -46,18 +46,8 @@ class FaceIDTracker:
     # 目标丢失清理（增加容错时间，避免位置固定时被过早清理）
     MAX_TIME_SINCE_SEEN = 5.0  # 最大未出现时间（秒，增加容错，允许短暂检测失败）
     
-    
-    def __init__(self,
-                 logger = None, # 接收 ROS logger
-                 iou_threshold: float = 0.15,
-                 distance_threshold: float = 0.30,
-                 max_time_since_seen: float = 5.0):
-        self.logger = logger if logger else logging.getLogger("FaceIDTracker")
-        
-        # 配置参数
-        self.iou_threshold = iou_threshold
-        self.distance_threshold = distance_threshold
-        self.max_time_since_seen = max_time_since_seen
+    def __init__(self):
+        self.logger = logging.getLogger("FaceIDTracker")
         
         # 追踪目标字典 {face_id: TrackedFace}
         self._tracks: Dict[int, TrackedFace] = {}
@@ -124,16 +114,16 @@ class FaceIDTracker:
                 
                 # 记录匹配尝试
                 self.logger.debug(f"[FaceIDTracker] 匹配尝试: track_id={track_id} vs detection[{i}]: "
-                                f"IoU={iou:.3f} (阈值={self.iou_threshold}), "
-                                f"distance={distance:.3f} (阈值={self.distance_threshold})")
+                                f"IoU={iou:.3f} (阈值={self.IOU_THRESHOLD}), "
+                                f"distance={distance:.3f} (阈值={self.DISTANCE_THRESHOLD})")
                 
                 # 匹配策略（优先级从高到低）：
                 # 1. 如果 IoU 很高（> 0.85），即使距离稍大也匹配（容错机制，处理微小变化）
                 # 2. 如果距离很近（< 0.15），即使 IoU 稍低也匹配（处理 bbox 微小变化）
                 # 3. 正常匹配：IoU > 阈值 且 距离 < 阈值
-                is_high_iou_match = iou > self.HIGH_IOU_THRESHOLD and distance < self.distance_threshold * 2.5
+                is_high_iou_match = iou > self.HIGH_IOU_THRESHOLD and distance < self.DISTANCE_THRESHOLD * 2.5
                 is_close_distance_match = distance < 0.15 and iou > 0.1  # 距离很近时，IoU 要求进一步降低
-                is_normal_match = iou > self.iou_threshold and distance < self.distance_threshold
+                is_normal_match = iou > self.IOU_THRESHOLD and distance < self.DISTANCE_THRESHOLD
                 
                 if is_high_iou_match or is_close_distance_match or is_normal_match:
                     # 选择 IoU 最高的匹配
@@ -144,7 +134,7 @@ class FaceIDTracker:
             
             # 如果找到匹配（IoU 或距离满足条件），更新追踪目标
             # 注意：best_iou 可能小于 IOU_THRESHOLD（如果是 close_distance_match），但仍然有效
-            if best_detection_idx is not None:
+            if best_detection_idx is not None and best_iou > 0.2:
                 face, bbox, center = detections[best_detection_idx]
                 face.face_id = track_id
                 
@@ -178,8 +168,8 @@ class FaceIDTracker:
                     # 这种情况可能是阈值设置过严导致的
                     if best_iou_all > 0.8 or best_distance_all < 0.15:
                         self.logger.warning(f"[FaceIDTracker] ⚠️ 匹配失败（接近阈值）: track_id={track_id}, "
-                                          f"最佳IoU={best_iou_all:.3f} (阈值={self.iou_threshold}), "
-                                          f"最佳distance={best_distance_all:.3f} (阈值={self.distance_threshold}), "
+                                          f"最佳IoU={best_iou_all:.3f} (阈值={self.IOU_THRESHOLD}), "
+                                          f"最佳distance={best_distance_all:.3f} (阈值={self.DISTANCE_THRESHOLD}), "
                                           f"可能是阈值过严或检测有微小变化")
                     else:
                         self.logger.debug(f"[FaceIDTracker] ❌ 匹配失败: track_id={track_id}, "
@@ -273,9 +263,9 @@ class FaceIDTracker:
             should_remove = False
             reason = ""
             
-            if time_since_seen > self.max_time_since_seen:
+            if time_since_seen > self.MAX_TIME_SINCE_SEEN:
                 should_remove = True
-                reason = f"未出现时间={time_since_seen:.3f}s > {self.max_time_since_seen}s"
+                reason = f"未出现时间={time_since_seen:.3f}s > {self.MAX_TIME_SINCE_SEEN}s"
             
             if should_remove:
                 tracks_to_remove.append(track_id)

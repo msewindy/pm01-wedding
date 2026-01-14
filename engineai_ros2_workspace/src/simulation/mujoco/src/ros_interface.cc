@@ -279,6 +279,14 @@ void RosInterface::JointStateTimerCallback() {
 }
 
 bool RosInterface::InitializeCamera(const mjModel* model, mjrContext* shared_context) {
+  if (only_action_) {
+    // If only_action is set, we don't create publishers, so we shouldn't render either.
+    // Return true to indicate "initialization handled" (so caller stops trying)
+    // but don't actually create the renderer.
+    camera_initialized_ = true;
+    return true; 
+  }
+
   if (!model) {
     RCLCPP_ERROR(node_->get_logger(), "Cannot initialize camera: model is null");
     return false;
@@ -288,7 +296,7 @@ bool RosInterface::InitializeCamera(const mjModel* model, mjrContext* shared_con
   if (camera_initialized_) {
     return true;
   }
-
+  
   // Check if camera exists in model
   int cam_id = mj_name2id(model, mjOBJ_CAMERA, "head_rgbd_camera");
   if (cam_id < 0) {
@@ -335,7 +343,7 @@ void RosInterface::CameraTimerCallback() {
 }
 
 void RosInterface::RenderAndPublishCamera(const mjModel* model, const mjData* data) {
-  if (!camera_initialized_ || !camera_renderer_ || !camera_renderer_->IsInitialized()) {
+  if (only_action_ || !camera_initialized_ || !camera_renderer_ || !camera_renderer_->IsInitialized()) {
     return;
   }
 

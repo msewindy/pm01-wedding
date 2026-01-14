@@ -496,6 +496,9 @@ void SimManager::OnPostRender(const mjModel* m, const mjData* d, mjrContext* con
 
   // Try to initialize camera on first call (now we have valid OpenGL context)
   // Pass the shared context so camera renderer can reuse loaded textures
+  // Try to initialize camera on first call (now we have valid OpenGL context)
+  // Pass the shared context so camera renderer can reuse loaded textures
+  std::lock_guard<std::recursive_mutex> lock(sim_->mtx);
   if (!camera_initialized) {
     if (ros_interface_->InitializeCamera(m, context)) {
       camera_initialized = true;

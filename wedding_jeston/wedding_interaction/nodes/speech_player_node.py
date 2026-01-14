@@ -50,19 +50,42 @@ class SpeechPlayerNode(Node):
         tts_rate = self.get_parameter('tts_rate').value
         
         # 如果未指定音频目录，使用默认目录
+        # 如果未指定音频目录，尝试自动查找
         if not audio_dir:
+            # 1. 尝试从 share 目录获取 (Standard Install)
             try:
                 share_dir = get_package_share_directory('wedding_interaction')
-                audio_dir = str(Path(share_dir) / "audio_resources")
+                share_audio = Path(share_dir) / "audio_resources"
+                if share_audio.exists() and any(share_audio.iterdir()):
+                   audio_dir = str(share_audio)
+                   self.get_logger().info(f"Using share directory for audio: {audio_dir}")
+                else:
+                    self.get_logger().warn(f"Share audio dir empty or missing: {share_audio}")
             except Exception as e:
-                # Fallback for local development
-                print(f"Error finding share directory: {e}")
-                audio_dir = str(Path(__file__).parent.parent.parent / "audio_resources")
-        
-        print(f"DEBUG: SpeechPlayer using audio_dir: {audio_dir}")
+                self.get_logger().warn(f"Could not find share directory: {e}")
+
+        # 2. 如果 share 没找到，尝试从源码/开发环境查找 (Local / Symlink)
+        if not audio_dir:
+            # 假设结构: .../wedding_jeston/wedding_interaction/nodes/speech_player_node.py
+            # 目标: .../wedding_jeston/audio_resources
+            source_path = Path(__file__).parent.parent.parent / "audio_resources"
+            if source_path.exists():
+                audio_dir = str(source_path)
+                self.get_logger().info(f"Using source directory for audio: {audio_dir}")
+            else:
+                 self.get_logger().error(f"Could not find audio_resources in source path: {source_path}")
+
+        # Final check
+        if audio_dir:
+             self.get_logger().info(f"SpeechPlayer audio_dir resolved to: {audio_dir}")
+        else:
+             self.get_logger().error("Failed to resolve audio_dir! Prerecorded audio will not play.")
+
         
         # 创建语音管理器
+        # 创建语音管理器
         self.speech_manager = SpeechManager(
+            node_logger=self.get_logger(),
             audio_dir=audio_dir if audio_dir else None,
             tts_enabled=tts_enabled,
             tts_engine=tts_engine,

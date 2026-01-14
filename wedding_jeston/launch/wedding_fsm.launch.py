@@ -13,7 +13,7 @@ from launch.actions import DeclareLaunchArgument, TimerAction
 def generate_launch_description():
     # 获取包路径
     pkg_dir = get_package_share_directory('wedding_interaction')
-    config_file = os.path.join(pkg_dir, 'config', 'fsm_config.yaml')
+    config_file = os.path.join(pkg_dir, 'config', 'parameters.yaml')
 
     control_rate_arg = DeclareLaunchArgument(
         'control_rate',
@@ -42,10 +42,9 @@ def generate_launch_description():
                 executable='motion_adapter',
                 name='motion_adapter_node',
                 output='screen',
-                parameters=[
+                parameters=[config_file, {
                     {'control_rate': LaunchConfiguration('control_rate')},
-                    {'smooth_factor': 1.0},  # 更平滑的过渡
-                ],
+                }],
                 emulate_tty=True,
             )
         ]
@@ -67,12 +66,9 @@ def generate_launch_description():
         executable='perception_node',
         name='perception_node',
         output='screen',
-        parameters=[{
+        parameters=[config_file, {
             'use_usb_camera': LaunchConfiguration('use_usb_camera'),
             'image_topic': LaunchConfiguration('image_topic'),
-            'detection_rate': 30.0,
-            'use_face_mesh': True,
-            'model_selection': 0,
         }],
     )
     

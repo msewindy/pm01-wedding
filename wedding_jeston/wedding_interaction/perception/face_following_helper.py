@@ -98,7 +98,13 @@ class FaceFollowingHelper:
                    last_error_x: float = 0.0, last_error_y: float = 0.0,
                    dt: float = 0.02,
                    logger = None,
-                   log_prefix: str = "") -> Tuple[float, float, float, float]:
+                   log_prefix: str = "",
+                   kp: float = 0.05,
+                   ki: float = 0.0,
+                   kd: float = 0.01,
+                   max_angle_change: float = 0.02,
+                   approach_threshold: float = 0.10,
+                   approach_damping: float = 0.3) -> Tuple[float, float, float, float]:
         """
         基于 PID 控制的跟随（基于角度误差）
         
@@ -136,12 +142,14 @@ class FaceFollowingHelper:
         # 使用 info 级别确保日志能输出（debug 级别可能被过滤）
         def log_debug(msg: str) -> None:
             if logger is not None:
-                prefix = f"{log_prefix} " if log_prefix else ""
+                # Force info level for diagnostics
+                prefix = f"[PID_DEBUG] {log_prefix} " if log_prefix else "[PID_DEBUG] "
+                # prefix = f"{log_prefix} " if log_prefix else ""
                 full_msg = f"{prefix}{msg}"
-                # 优先使用 info 级别，确保日志能输出
-                if hasattr(logger, 'info'):
-                    logger.info(full_msg)
-                elif hasattr(logger, 'debug'):
+                # 优先使用 debug 级别
+                if hasattr(logger, 'save_log'): # Custom logger might support save_log
+                     logger.debug(full_msg)
+                elif hasattr(logger, 'info'):
                     logger.debug(full_msg)
         
         # 1. 计算归一化偏差（相对于图像中心 0.5）
@@ -168,44 +176,58 @@ class FaceFollowingHelper:
             return (current_look_at_x, 0.5, integral_x, 0.0)
         
         # 4. P 控制：比例项（角速度与角度误差成正比）
-        p_x = FaceFollowingHelper.Kp * angle_error_x
-        #log_debug(f"[P控制] Kp={FaceFollowingHelper.Kp}, p_x={p_x:.6f}rad")
+        p_x = kp * angle_error_x
+        #log_debug(f"[P控制] Kp={kp}, p_x={p_x:.6f}rad")
         
         # 5. I 控制：积分项（可选，用于消除稳态误差）
+        # [Robustness] Limit dt to avoid integral spikes during lag
+        if dt > 0.1:
+            log_debug(f"[PID保护] dt={dt:.3f}s > 0.1s, limiting to 0.1s")
+            dt = 0.1
+
+        # 5. I 控制：积分项（可选，用于消除稳态误差）
         integral_x += angle_error_x * dt
-        i_x = FaceFollowingHelper.Ki * integral_x
-        #log_debug(f"[I控制] Ki={FaceFollowingHelper.Ki}, integral_x={integral_x:.6f}, i_x={i_x:.6f}rad")
+        
+        # [Robustness] Anti-windup
+        integral_x = max(-1.0, min(1.0, integral_x))
+            
+        i_x = ki * integral_x
+        #log_debug(f"[I控制] Ki={ki}, integral_x={integral_x:.6f}, i_x={i_x:.6f}rad")
         
         # 6. D 控制：微分项（可选，用于防止超调）
         derivative_x = (angle_error_x - last_error_x) / dt if dt > 0 else 0.0
-        d_x = FaceFollowingHelper.Kd * derivative_x
+        d_x = kd * derivative_x
         #log_debug(f"[D控制] Kd={FaceFollowingHelper.Kd}, derivative_x={derivative_x:.6f}rad/s, "
         #         f"d_x={d_x:.6f}rad, last_error_x={last_error_x:.6f}rad")
         
         # 7. 计算 PID 输出（角度变化量，单位：弧度）
         angle_change_x_before_damping = p_x + i_x + d_x
         angle_change_x = angle_change_x_before_damping
-        #log_debug(f"[PID输出] angle_change_x={angle_change_x:.6f}rad "
-        #        f"(P={p_x:.6f} + I={i_x:.6f} + D={d_x:.6f})")
+        log_debug(f"[PID输出] angle_change_x={angle_change_x:.6f}rad "
+                  f"(P={p_x:.6f} + I={i_x:.6f} + D={d_x:.6f})")
         
+
         # 8. 方向反转（机器人旋转方向与目标移动方向相反，必须取反）
         if FaceFollowingHelper.REVERSE_DIRECTION:
             angle_change_x = -angle_change_x
-        #    log_debug(f"[方向反转] REVERSE_DIRECTION=True, angle_change_x={angle_change_x:.6f}rad")
+            # log_debug(f"[方向反转] REVERSE_DIRECTION=True, angle_change_x={angle_change_x:.6f}rad")
+        
+        # [Debug] Show final decision before damping
+        # log_debug(f"[PID方向] Final raw angle_change={angle_change_x:.6f} (Reverse={FaceFollowingHelper.REVERSE_DIRECTION})")
         
         # 9. 【接近目标减速】
         # 当角度误差较小时，提前减速，避免过冲
         if FaceFollowingHelper.APPROACH_DAMPING_ENABLED:
-            if abs(angle_error_x) < FaceFollowingHelper.APPROACH_ANGLE_THRESHOLD:
+            if abs(angle_error_x) < approach_threshold:
                 angle_change_x_before = angle_change_x
-                angle_change_x *= FaceFollowingHelper.APPROACH_DAMPING
+                angle_change_x *= approach_damping
                 log_debug(f"[接近减速] 角度误差 {abs(angle_error_x):.4f}rad < "
-                         f"阈值 {FaceFollowingHelper.APPROACH_ANGLE_THRESHOLD:.4f}rad, "
-                         f"阻尼={FaceFollowingHelper.APPROACH_DAMPING}, "
+                         f"阈值 {approach_threshold:.4f}rad, "
+                         f"阻尼={approach_damping}, "
                          f"angle_change_x: {angle_change_x_before:.6f} -> {angle_change_x:.6f}rad")
         
         # 10. 限制角度变化量（防止过大变化导致抖动）
-        max_angle_change = FaceFollowingHelper.MAX_ANGLE_CHANGE_PER_FRAME
+        # max_angle_change 使用参数传递的值
         angle_change_x_before_limit = angle_change_x
         angle_change_x = max(-max_angle_change, min(max_angle_change, angle_change_x))
 

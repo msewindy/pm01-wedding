@@ -1,0 +1,142 @@
+wedding_fsm_node:
+  ros__parameters:
+    # ========== 全局配置 (Global Config) ==========
+    enable_action: true        # 是否启用动作执行（调试时可关闭以只运行逻辑）
+    enable_speech: true        # 是否启用语音播放
+    fsm_rate: 25.0             # 状态机主循环频率 (Hz)
+    state_pub_rate: 5.0        # 状态信息发布频率 (Hz)
+    audio_dir: ""             # 音频文件目录 (空字符串表示使用默认包路径)
+    
+    # ========== IDLE 状态配置 (待机/观察) ==========
+    # 动作切换逻辑
+    idle_switch_interval_min: 3.0   # 闲置动作(idle_normal)切换的最小间隔 (秒)
+    idle_switch_interval_max: 6.0  # 闲置动作切换的最大间隔 (秒)
+    idle_greeting_probability: 0.4  # 在检测到人脸但未确认为目标时，播放问候语的概率 (0-1)
+    
+    # 观察阶段 (Look Around)
+    idle_observe_duration_min: 3.0  # 随机观察动作的最小持续时间 (秒)
+    idle_observe_duration_max: 4.5  # 随机观察动作的最大持续时间 (秒)
+    
+    # 人脸检测逻辑
+    idle_face_confirm_time: 2.0   # IDLE状态下确认"检测到人脸"所需的最短持续时间 (秒)
+    idle_face_lost_tolerance: 0.2   # IDLE状态下允许人脸短暂丢失的时间 (秒)
+    
+    # ========== TRACKING 状态配置 (跟随) ==========
+    # 丢失判定
+    tracking_lost_timeout: 5.0              # 目标丢失超过此时间将返回 IDLE (秒)
+    
+    # 逻辑流程
+    tracking_stable_duration: 2.0           # 稳定跟踪持续此时间后，允许触发后续互动 (秒)
+    tracking_auto_interview_duration: 1.5   # 稳定跟踪后自动进入采访状态的等待时间 (秒)
+    tracking_interview_trigger_min_lost: 0.5 # 触发采访前允许目标丢失的最小时间 (防抖)
+    tracking_interview_trigger_max_lost: 1.5 # 触发采访前允许目标丢失的最大时间
+    
+    # ========== SEARCH 状态配置 (搜索) ==========
+    search_face_confirm_time: 3.0   # SEARCH状态下确认找到目标所需的最短持续时间 (秒，比IDLE严格)
+    search_timeout: 5.0            # 搜索总超时时间，超时后返回 IDLE (秒)
+    search_no_target_timeout: 2.0   # 如果一直未检测到任何人脸的超时时间 (秒)
+    
+    # ========== INTERVIEW 状态配置 (采访) ==========
+    interview_greeting_duration: 3.0    # 问候语阶段持续时间 (秒)
+    interview_question_duration: 2.0    # 提问阶段的基础持续时间 (秒，实际会根据文本长度动态增加)
+    interview_no_speech_timeout: 5.0    # 还没开始说话时的等待超时 (秒)
+    interview_speech_max_duration: 30.0 # 开始说话后的最大允许时长 (秒)
+    interview_silence_threshold: 2.5    # 判定用户回答结束的静音持续时间 (秒)
+    interview_ending_duration: 2.0      # 结束语阶段持续时间 (秒)
+    interview_done_duration: 1.0        # 完成后的缓冲时间 (秒)
+    interview_voice_threshold: 0.02     # 声音能量阈值，超过此值视为有人说话 (0-1)
+    interview_mic_gain: 2.0             # 软件数字增益 (默认 2.0 倍)
+    interview_auto_init_alsa: true      # 是否自动初始化 ALSA 硬件 mixer 设置
+    
+    # ========== 全局跟踪器参数 (Unified FaceTracker) ==========
+    face_tracker_pos_match_threshold: 0.3 # 目标丢失时，尝试使用位置匹配的阈值 (当ID变化时)
+    
+    # 录制配置
+    interview_recording_save_path: "/home/lfw/Desktop/interview_records"   # 视频保存路径
+    
+    # ========== PID 控制配置 (头部跟随) ==========
+    pid_kp: 0.1             # 比例系数: 响应速度 (值越大响应越快，但易震荡)
+    pid_ki: 0.0             # 积分系数: 消除稳态误差 (通常设为0)
+    pid_kd: 0.01            # 微分系数: 阻尼作用 (减少震荡)
+    pid_max_angle_change: 0.05 # 单帧最大角度变化量 (约2.9度)，限制转头速度
+    pid_approach_threshold: 0.05 # 接近目标时的微调阈值 (在此范围内减速)
+    pid_approach_threshold: 0.05 # 接近目标时的微调阈值 (在此范围内减速)
+    pid_approach_damping: 0.5    # 接近目标时的阻尼系数 (防止在目标附近抖动)
+    
+    # 录制音频参数
+    interview_audio_sample_rate: 16000 # 麦克风采样率 (XF_AIUI 需要 16000)
+    
+    
+motion_adapter_node:
+  ros__parameters:
+    control_rate: 500.0   # 运动控制循环频率 (Hz)
+    
+    # 关节 PD 控制参数 (模拟伺服刚性)
+    pd_leg_kp: 400.0      # 腿部刚度
+    pd_leg_kd: 5.0        # 腿部阻尼
+    pd_body_kp: 200.0     # 腰部/头部刚度
+    pd_body_kd: 3.0       # 腰部/头部阻尼
+    pd_arm_kp: 100.0      # 手臂刚度
+    pd_arm_kd: 2.0        # 手臂阻尼
+    
+    # 运动平滑参数 (速度/加速度限制)
+    # 头部 (Head)
+    motion_head_vel: 1.5  # 最大速度 (rad/s)
+    motion_head_acc: 5.0  # 最大加速度 (rad/s^2)
+    
+    # 腰部 (Waist)
+    motion_waist_vel: 1.0 # 最大速度
+    motion_waist_acc: 4.0 # 最大加速度
+    
+    # 手臂 (Arm)
+    motion_arm_vel: 1.0   # 最大速度
+    motion_arm_acc: 2.0   # 最大加速度
+
+
+perception_node:
+  ros__parameters:
+    use_usb_camera: false       # 是否使用 USB 摄像头 (False则使用 RealSense)
+    usb_camera_id: 0            # USB 摄像头设备 ID
+    image_topic: "/camera/color/image_raw" # 订阅的图像话题
+    detection_rate: 30.0        # 人脸检测频率 (Hz)
+    use_face_mesh: true         # 是否使用 FaceMesh (MediaPipe) 获取更精细特征
+    model_selection: 0          # 0: 近距离模式 (2m内), 1: 远距离模式 (5m内)
+    force_opencv: false         # 调试用，强制使用 OpenCV 窗口显示
+    
+    # 人脸检测阈值
+    face_frontal_yaw_threshold: 30.0    # 判定为正脸的最大偏航角 (度)
+    face_frontal_pitch_threshold: 20.0  # 判定为正脸的最大俯仰角 (度)
+    face_min_detection_confidence: 0.80  # 最小检测置信度 (提高以减少误检)
+    face_min_tracking_confidence: 0.80   # 最小跟踪置信度 (提高以减少误检)
+    face_min_size: 0.2    # 最小人脸尺寸 (相对于图像宽度的比例，0.0-1.0)，过滤过小的误检
+    
+    # 人脸跟踪逻辑 (多目标ID维持)
+    face_tracker_iou_threshold: 0.05     # 帧间匹配的 IOU 阈值 (降低至0.05以适应快速移动)
+    face_tracker_distance_threshold: 0.30 # 帧间匹配的距离阈值 (增加至0.30以增加容错)
+    face_tracker_max_time_since_seen: 2.0 # 目标丢失多久后清除 ID (秒)
+
+
+perception_visualizer_node:
+  ros__parameters:
+    image_topic: "/camera/head/rgb/image_raw"    # 源图像话题
+    output_topic: "/wedding/perception/visualization" # 可视化结果发布话题
+
+
+speech_player_node:
+  ros__parameters:
+    audio_dir: ""              # 本地音频资源目录
+    tts_enabled: true          # 是否启用 Edge TTS 在线合成
+    tts_model: ""              # (未启用)
+    tts_engine: "edge"         # TTS 引擎类型
+    tts_voice: "zh-CN-YunxiaNeural" # TTS 语音角色
+    tts_rate: "+0%"            # 语速调整
+
+
+realsense_publisher_node:
+  ros__parameters:
+    topic_name: "/camera/head/rgb/image_raw" # 发布的图像话题
+    serial_number: '347622073192'          # RealSense 序列号
+    device_index: -1                         # 设备索引 (-1表示自动搜索)
+    fps: 30                                  # 采集帧率
+    width: 640                               # 采集宽度
+    height: 480                              # 采集高度

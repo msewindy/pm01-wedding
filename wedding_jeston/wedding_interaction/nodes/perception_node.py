@@ -52,6 +52,18 @@ class PerceptionNode(Node):
         self.declare_parameter('model_selection', 0)  # 0: 近距离, 1: 远距离
         self.declare_parameter('force_opencv', False)  # False: 使用 MediaPipe (如果可用), True: 强制使用 OpenCV
         
+        # Face Detector Thresholds
+        self.declare_parameter('face_frontal_yaw_threshold', 30.0)
+        self.declare_parameter('face_frontal_pitch_threshold', 20.0)
+        self.declare_parameter('face_min_detection_confidence', 0.5)
+        self.declare_parameter('face_min_tracking_confidence', 0.5)
+        self.declare_parameter('face_min_size', 0.05) # 最小人脸尺寸 (比例 0-1)
+        
+        # Face Tracker
+        self.declare_parameter('face_tracker_iou_threshold', 0.15)
+        self.declare_parameter('face_tracker_distance_threshold', 0.30)
+        self.declare_parameter('face_tracker_max_time_since_seen', 5.0)
+        
         self._use_usb_camera = self.get_parameter('use_usb_camera').value
         self._usb_camera_id = self.get_parameter('usb_camera_id').value
         self._image_topic = self.get_parameter('image_topic').value
@@ -60,11 +72,31 @@ class PerceptionNode(Node):
         self._model_selection = self.get_parameter('model_selection').value
         self._force_opencv = self.get_parameter('force_opencv').value
         
+        # Thresholds
+        face_frontal_yaw_threshold = self.get_parameter('face_frontal_yaw_threshold').value
+        face_frontal_pitch_threshold = self.get_parameter('face_frontal_pitch_threshold').value
+        face_min_detection_confidence = self.get_parameter('face_min_detection_confidence').value
+        face_min_tracking_confidence = self.get_parameter('face_min_tracking_confidence').value
+        face_min_size = self.get_parameter('face_min_size').value
+        
+        face_tracker_iou_threshold = self.get_parameter('face_tracker_iou_threshold').value
+        face_tracker_distance_threshold = self.get_parameter('face_tracker_distance_threshold').value
+        face_tracker_max_time_since_seen = self.get_parameter('face_tracker_max_time_since_seen').value
+        
         # 人脸检测器
         self._face_detector = FaceDetector(
             use_face_mesh=self._use_face_mesh,
+            min_detection_confidence=face_min_detection_confidence,
+            min_tracking_confidence=face_min_tracking_confidence,
+            frontal_yaw_threshold=face_frontal_yaw_threshold,
+            frontal_pitch_threshold=face_frontal_pitch_threshold,
+            tracker_iou_threshold=face_tracker_iou_threshold,
+            tracker_distance_threshold=face_tracker_distance_threshold,
+            tracker_max_time_since_seen=face_tracker_max_time_since_seen,
             model_selection=self._model_selection,
-            force_opencv=self._force_opencv
+            force_opencv=self._force_opencv,
+            min_face_size=face_min_size,
+            logger=self.get_logger() # 传递 ROS logger
         )
         
         # 无需 cv_bridge，直接处理 ROS Image
@@ -114,6 +146,7 @@ class PerceptionNode(Node):
         # 统计
         self._frame_count = 0
         self._start_time = time.time()
+        self._last_processed_ts = -1.0  # 上一次处理的帧时间戳
         
         self.get_logger().info(f"PerceptionNode initialized "
                               f"(use_usb={self._use_usb_camera}, rate={self._detection_rate}Hz)")
@@ -145,8 +178,10 @@ class PerceptionNode(Node):
                 break
             ret, frame = self._cap.read()
             if ret:
+                timestamp = time.time()
                 with self._image_lock:
-                    self._latest_image = frame
+                    # 统一使用 tuple (image, timestamp) 格式
+                    self._latest_image = (frame, timestamp)
             time.sleep(0.01)  # 100 Hz
     
     def _image_callback(self, msg: Image) -> None:
@@ -181,7 +216,8 @@ class PerceptionNode(Node):
             cv_image = np.ascontiguousarray(cv_image)
             
             with self._image_lock:
-                self._latest_image = cv_image
+                # 存储图像和 Header (包含时间戳)
+                self._latest_image = (cv_image, msg.header)
                 
         except Exception as e:
             self.get_logger().error(f"Image conversion failed: {e}")
@@ -190,7 +226,38 @@ class PerceptionNode(Node):
         """检测主循环"""
         # 获取图像
         with self._image_lock:
-            image = self._latest_image
+            image_data = self._latest_image
+        
+        if image_data is None:
+            return
+            
+        # 解析图像和时间戳
+        image = None
+        timestamp = 0.0
+        
+        if isinstance(image_data, tuple):
+            img_obj, ts_obj = image_data
+            image = img_obj
+            if hasattr(ts_obj, 'stamp'): # ROS Header
+                timestamp = ts_obj.stamp.sec + ts_obj.stamp.nanosec * 1e-9
+            else: # Float timestamp
+                timestamp = float(ts_obj)
+            
+            # [Fix for Sim] 如果 timestamp 为 0 (仿真环境可能未设置时间)，使用当前时间
+            if timestamp == 0.0:
+                timestamp = time.time()
+        else:
+            # 兼容旧代码（虽然应该不会执行到这里）
+            image = image_data
+            timestamp = time.time()
+            
+        # 检查是否是新帧 (容差 1ms)
+        if timestamp <= self._last_processed_ts + 0.001:
+            # 这一帧已经处理过了，跳过
+            return
+            
+        self._last_processed_ts = timestamp
+
         
         if image is None:
             return
@@ -215,7 +282,7 @@ class PerceptionNode(Node):
             self.get_logger().debug("[PerceptionNode] 未检测到人脸")
         
         # 发布结果
-        self._publish_results(faces)
+        self._publish_results(faces, timestamp)
         
         # 统计
         self._frame_count += 1
@@ -227,16 +294,23 @@ class PerceptionNode(Node):
             self.get_logger().info(f"[PerceptionNode] FPS: {fps:.1f}, Faces: {len(faces)}, "
                                  f"追踪统计: {stats}")
     
-    def _publish_results(self, faces: list) -> None:
+    def _publish_results(self, faces: list, timestamp: float) -> None:
         """发布检测结果"""
         # 发布 faces_json
-        faces_data = [self._face_to_dict(f) for f in faces]
+        faces_data = [self._face_to_dict(f, timestamp) for f in faces]
         faces_msg = String()
-        faces_msg.data = json.dumps({'faces': faces_data, 'count': len(faces)})
+        faces_msg.data = json.dumps({
+            'faces': faces_data, 
+            'count': len(faces),
+            'timestamp': timestamp
+        })
         self._faces_pub.publish(faces_msg)
     
-    def _face_to_dict(self, face: FaceInfo) -> dict:
+    def _face_to_dict(self, face: FaceInfo, timestamp: float) -> dict:
         """将 FaceInfo 转换为字典"""
+        # 使用传入的准确时间戳
+        ts = timestamp
+        
         return {
             'x': face.x,
             'y': face.y,
@@ -251,7 +325,7 @@ class PerceptionNode(Node):
             'roll': face.roll,
             'confidence': face.confidence,
             'face_id': face.face_id,
-            'timestamp': face.timestamp,  # 添加时间戳，用于延时补偿
+            'timestamp': ts,  # 使用准确的时间戳
         }
     
     def destroy_node(self) -> None:

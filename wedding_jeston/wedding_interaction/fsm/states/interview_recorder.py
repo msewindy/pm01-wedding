@@ -13,7 +13,10 @@ import subprocess
 from datetime import datetime
 from typing import Optional, Callable
 import logging
+import ctypes
+from contextlib import contextmanager
 from collections import deque
+import numpy as np
 
 try:
     import cv2
@@ -27,6 +30,86 @@ try:
     PYAUDIO_AVAILABLE = True
 except ImportError:
     PYAUDIO_AVAILABLE = False
+
+
+# ========== ALSA Error Suppression ==========
+# ALSA/PyAudio tends to spam "unable to open slave" errors to stderr.
+# This context manager suppresses stderr at the C level.
+
+ERROR_HANDLER_FUNC = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p)
+
+def py_error_handler(filename, line, function, err, fmt):
+    pass
+
+c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
+
+@contextmanager
+def no_alsa_err():
+    if sys.platform != 'linux':
+        yield
+        return
+        
+    try:
+        asound = ctypes.cdll.LoadLibrary('libasound.so.2')
+        asound.snd_lib_error_set_handler(c_error_handler)
+        yield
+        asound.snd_lib_error_set_handler(None)
+    except:
+        yield
+
+
+def init_hardware_mixer(logger=None):
+    """
+    执行硬件混音器初始化命令 (ALSA)
+    主要用于开启 USB 麦克风的 Capture Switch 和设置最大音量
+    """
+    if logger is None:
+        logger = logging.getLogger("System")
+        
+    try:
+        # 1. 开启 Mic Capture Switch (索引 ID 为 3)，该开关默认是关闭的
+        # 注意：-c 0 假设 USB 麦克风是 0 号声卡。如果在其他机器上可能需要调整。
+        cmd_switch = ["amixer", "-c", "0", "cset", "numid=3", "on"]
+        subprocess.run(cmd_switch, check=True, capture_output=True)
+        
+        # 2. 确保硬件捕获音量已取消静音并设为 100%
+        cmd_vol = ["amixer", "-c", "0", "sset", "Mic", "100%", "unmute"]
+        subprocess.run(cmd_vol, check=True, capture_output=True)
+        
+        logger.info("ALSA hardware mixer initialized successfully (Capture Switch=ON, Vol=100%)")
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Failed to set ALSA mixer (cmd failed): {e}")
+    except Exception as e:
+        logger.warning(f"Failed to set ALSA mixer: {e}")
+
+
+# ========== PyAudio Singleton ==========
+# PulseAudio/ALSA can be unstable if PyAudio is initialized/terminated repeatedly.
+# We use a singleton to keep one instance alive for the process duration.
+class PyAudioSingleton:
+    _instance = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls):
+        if not PYAUDIO_AVAILABLE:
+            return None
+            
+        with cls._lock:
+            if cls._instance is None:
+                try:
+                    with no_alsa_err():
+                        cls._instance = pyaudio.PyAudio()
+                except Exception as e:
+                    logging.getLogger("PyAudioSingleton").error(f"Failed to init PyAudio: {e}")
+                    return None
+        return cls._instance
+
+    @classmethod
+    def terminate(cls):
+        pass 
+        # Ideally we never terminate it to avoid the crash, let OS cleanup on exit.
+        # calls to terminate() caused 'unaligned fastbin chunk' or assertion errors.
 
 
 class VideoRecorder:
@@ -44,6 +127,7 @@ class VideoRecorder:
                  fps: int = 30,
                  frame_callback: Optional[Callable] = None,
                  start_event: Optional[threading.Event] = None,
+                 enable_beauty: bool = False,
                  logger: Optional[logging.Logger] = None):
         """
         初始化视频录制器
@@ -56,6 +140,7 @@ class VideoRecorder:
             fps: 帧率
             frame_callback: 帧回调函数（返回OpenCV格式的frame，或None）
             start_event: 同步启动事件（用于与音频同步）
+            enable_beauty: 是否启用美颜滤镜
             logger: 日志记录器
         """
         self.open = True
@@ -68,6 +153,7 @@ class VideoRecorder:
         self.start_time = 0.0  # 将在record()中设置
         self.frame_callback = frame_callback
         self.start_event = start_event
+        self.enable_beauty = enable_beauty
         self.logger = logger or logging.getLogger("VideoRecorder")
         
         # 初始化视频写入器
@@ -97,6 +183,22 @@ class VideoRecorder:
             self.video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, sizex)
             self.video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, sizey)
             self.video_cap.set(cv2.CAP_PROP_FPS, fps)
+            
+    def _apply_beauty_filter(self, frame):
+        """
+        应用简单的美颜滤镜 (双边滤波)
+        """
+        try:
+            # 双边滤波：保留边缘的同时平滑区域 (磨皮)
+            # d: 邻域直径 (此值越大越慢)
+            # sigmaColor: 颜色空间的标准差 (值越大，颜色混合越强)
+            # sigmaSpace: 坐标空间的标准差 (值越大，远处像素影响越强)
+            # 参数调优建议: d=5-9 (实时性), sigmaColor=75, sigmaSpace=75
+            
+            # 使用较小的 d 值以保证实时性
+            return cv2.bilateralFilter(frame, d=7, sigmaColor=75, sigmaSpace=75)
+        except Exception:
+            return frame
     
     def record(self):
         """视频录制循环（在线程中运行）"""
@@ -119,11 +221,19 @@ class VideoRecorder:
                 if current_time >= next_frame_time:
                     frame = self.frame_callback()
                     if frame is not None:
+                        if self.frame_counts == 0:
+                            self.logger.info(f"First frame captured from callback. Size: {frame.shape}")
+                        
                         # 调整帧大小（使用高质量插值）
                         if frame.shape[:2] != self.frameSize[::-1]:
                             # 使用 INTER_LINEAR 或 INTER_CUBIC 提高缩放质量
                             # INTER_CUBIC 质量更好但稍慢，INTER_LINEAR 是平衡选择
                             frame = cv2.resize(frame, self.frameSize, interpolation=cv2.INTER_LINEAR)
+                            
+                        # 应用美颜 (如果启用)
+                        if self.enable_beauty:
+                            frame = self._apply_beauty_filter(frame)
+                            
                         self.video_out.write(frame)
                         self.frame_counts += 1
                         next_frame_time += frame_interval
@@ -142,6 +252,12 @@ class VideoRecorder:
                 # 从摄像头读取（固定帧率）
                 ret, video_frame = self.video_cap.read()
                 if ret:
+                    if self.frame_counts == 0:
+                        self.logger.info(f"First frame captured from camera. Size: {video_frame.shape}")
+                    
+                    if self.enable_beauty:
+                        video_frame = self._apply_beauty_filter(video_frame)
+                        
                     self.video_out.write(video_frame)
                     self.frame_counts += 1
                     # 使用精确的时间控制
@@ -153,6 +269,8 @@ class VideoRecorder:
                     break
             else:
                 break
+        
+        self.logger.info(f"Video recording finished. Total frames: {self.frame_counts}")
         
         # 释放资源（确保在线程内释放）
         if self.video_out:
@@ -184,6 +302,7 @@ class AudioRecorder:
     def __init__(self, filename: str, rate: int = 44100, 
                  fpb: int = 1024, channels: int = 2,
                  input_device_index: Optional[int] = None,
+                 gain: float = 1.0,
                  start_event: Optional[threading.Event] = None,
                  logger: Optional[logging.Logger] = None):
         """
@@ -194,7 +313,12 @@ class AudioRecorder:
             rate: 采样率
             fpb: 每帧采样数
             channels: 声道数
+            filename: 输出音频文件名
+            rate: 采样率
+            fpb: 每帧采样数
+            channels: 声道数
             input_device_index: 输入设备索引（None表示使用默认设备）
+            gain: 软件数字增益倍数 (1.0 = 原始音量)
             start_event: 同步启动事件（用于与视频同步）
             logger: 日志记录器
         """
@@ -207,10 +331,17 @@ class AudioRecorder:
         self.channels = channels
         self.format = pyaudio.paInt16
         self.audio_filename = filename
+        self.gain = gain
         self.start_event = start_event
         self.start_time = 0.0  # 将在record()中设置
         self.logger = logger or logging.getLogger("AudioRecorder")
-        self.audio = pyaudio.PyAudio()
+        
+        # 使用单例获取 PyAudio 实例
+        # 避免重复创建/销毁导致的 PulseAudio 崩溃
+        self.audio = PyAudioSingleton.get_instance()
+        
+        if self.audio is None:
+             raise RuntimeError("无法初始化 PyAudio")
         
         # 如果没有指定输入设备，尝试使用默认输入设备
         if input_device_index is None:
@@ -233,7 +364,7 @@ class AudioRecorder:
                 frames_per_buffer=self.frames_per_buffer
             )
         except Exception as e:
-            self.audio.terminate()
+            # self.audio.terminate() # Do not terminate singleton
             raise RuntimeError(f"无法打开音频输入设备: {e}")
         
         self.audio_frames = []
@@ -247,39 +378,75 @@ class AudioRecorder:
         # 记录实际启动时间
         self.start_time = time.time()
         
-        self.stream.start_stream()
-        while self.open:
-            try:
-                data = self.stream.read(self.frames_per_buffer, exception_on_overflow=False)
-                self.audio_frames.append(data)
-            except Exception as e:
-                self.logger.error(f"音频读取错误: {e}")
-                break
-            if not self.open:
-                break
+        try:
+            self.stream.start_stream()
+            while self.open:
+                try:
+                    data = self.stream.read(self.frames_per_buffer, exception_on_overflow=False)
+                    
+                    # 应用软件增益
+                    if self.gain != 1.0:
+                        try:
+                            # 转换为 numpy 数组
+                            audio_data = np.frombuffer(data, dtype=np.int16)
+                            # 应用增益并裁剪防止溢出
+                            amplified_data = np.clip(audio_data * self.gain, -32768, 32767).astype(np.int16)
+                            self.audio_frames.append(amplified_data.tobytes())
+                        except Exception as e:
+                            # 如果处理失败，回退到原始数据
+                            self.logger.warning(f"Audio gain processing failed: {e}")
+                            self.audio_frames.append(data)
+                    else:
+                        self.audio_frames.append(data)
+                except Exception as e:
+                    self.logger.error(f"音频读取错误: {e}")
+                    break
+        except Exception as e:
+            self.logger.error(f"音频流错误: {e}")
+        finally:
+            # 在同一线程中关闭流，避免 PulseAudio 崩溃
+            if self.stream:
+                try:
+                    self.stream.stop_stream()
+                    self.stream.close()
+                    self.logger.info("Audio stream closed safely in thread")
+                except Exception as e:
+                    self.logger.warning(f"Error closing audio stream: {e}")
+    
+            # 这里不做文件保存，避免在主线程做耗时操作或线程未结束时操作
+            # 文件保存由 save_file() 显式调用，或者在线程结束后进行
+            pass
     
     def stop(self):
-        """停止录制并保存文件"""
-        if self.open:
-            self.open = False
-            if self.stream:
-                self.stream.stop_stream()
-                self.stream.close()
-            
-            # 保存音频文件
-            if self.audio_frames:
-                try:
-                    waveFile = wave.open(self.audio_filename, 'wb')
-                    waveFile.setnchannels(self.channels)
-                    waveFile.setsampwidth(self.audio.get_sample_size(self.format))
-                    waveFile.setframerate(self.rate)
-                    waveFile.writeframes(b''.join(self.audio_frames))
-                    waveFile.close()
-                except Exception as e:
-                    self.logger.error(f"保存音频文件失败: {e}")
-            
-            if self.audio:
-                self.audio.terminate()
+        """停止录制"""
+        self.open = False
+
+    def save_file(self):
+        """保存音频文件 (需要在 stop 后，线程 join 后调用)"""
+        if self.audio_frames:
+            try:
+                # 检查线程是否确实结束了
+                if threading.current_thread() != threading.main_thread():
+                     # 如果是在录制线程中调用（不推荐），则没问题
+                     pass
+                
+                waveFile = wave.open(self.audio_filename, 'wb')
+                waveFile.setnchannels(self.channels)
+                waveFile.setsampwidth(self.audio.get_sample_size(self.format))
+                waveFile.setframerate(self.rate)
+                waveFile.writeframes(b''.join(self.audio_frames))
+                waveFile.close()
+                self.logger.info(f"Audio saved to {self.audio_filename}")
+            except Exception as e:
+                self.logger.error(f"保存音频文件失败: {e}")
+    
+    def release(self):
+        """释放 PyAudio 资源（必须在线程结束后调用）"""
+        if self.audio:
+            self.logger.info("Releasing AudioRecorder resources (PyAudio instance kept alive)")
+            # Do not terminate the instance, as it is shared singleton
+            # PyAudioSingleton.terminate() 
+            self.audio = None
     
     def get_current_energy(self) -> float:
         """获取当前音频能量 (RMS)"""
@@ -333,7 +500,10 @@ class InterviewRecorder:
                  audio_sample_rate: int = 44100,
                  camera_index: Optional[int] = None,
                  frame_callback: Optional[Callable] = None,
+
                  video_quality: int = 18,  # CRF 值：18=高质量，23=中等质量，28=低质量
+                 audio_gain: float = 1.0,
+                 enable_beauty: bool = True,  # 默认开启美颜
                  logger: Optional[logging.Logger] = None):
         """
         初始化录制器
@@ -346,6 +516,8 @@ class InterviewRecorder:
             camera_index: 摄像头索引（如果为None且frame_callback也为None，则只录制音频）
             frame_callback: 帧回调函数（返回OpenCV格式的frame）
             video_quality: 视频质量（CRF值，18=高质量，23=中等质量，28=低质量）
+            audio_gain: 音频软件增益
+            enable_beauty: 是否开启美颜
             logger: 日志记录器
         """
         self.save_path = save_path
@@ -356,6 +528,8 @@ class InterviewRecorder:
         self.camera_index = camera_index
         self.frame_callback = frame_callback
         self.video_quality = video_quality  # CRF 值，用于 ffmpeg 编码
+        self.audio_gain = audio_gain
+        self.enable_beauty = enable_beauty
         
         # 录制状态
         self._is_recording = False
@@ -365,7 +539,7 @@ class InterviewRecorder:
         self._audio_thread: Optional[threading.Thread] = None
         
         # 录制参数
-        self.max_duration = 60.0  # 最大录制时长（秒）
+        self.max_duration = 120.0  # 最大录制时长（秒）
         self.min_duration = 5.0   # 最小录制时长（秒）
         
         # 录制统计
@@ -391,6 +565,13 @@ class InterviewRecorder:
             self.logger.warning("Recording already in progress")
             return False
         
+        # 尝试创建目录（如果看起来像目录）
+        if not os.path.exists(self.save_path) and not os.path.splitext(self.save_path)[1]:
+            try:
+                os.makedirs(self.save_path, exist_ok=True)
+            except Exception as e:
+                self.logger.warning(f"Could not create directory {self.save_path}: {e}")
+
         # 生成保存路径
         if os.path.isdir(self.save_path):
             # 如果是目录，生成文件名
@@ -400,7 +581,7 @@ class InterviewRecorder:
         else:
             # 如果是文件路径，直接使用
             self._actual_save_path = self.save_path
-            # 确保目录存在
+            # 确保父目录存在
             output_dir = os.path.dirname(self._actual_save_path)
             if output_dir and not os.path.exists(output_dir):
                 os.makedirs(output_dir, exist_ok=True)
@@ -426,6 +607,7 @@ class InterviewRecorder:
                         fps=self.video_fps,
                         frame_callback=self.frame_callback,
                         start_event=self._start_event,
+                        enable_beauty=self.enable_beauty,
                         logger=self.logger
                     )
                     self._video_thread = self._video_recorder.start()
@@ -440,6 +622,7 @@ class InterviewRecorder:
                     self._audio_recorder = AudioRecorder(
                         filename=self._temp_audio,
                         rate=self.audio_sample_rate,
+                        gain=self.audio_gain,
                         start_event=self._start_event,
                         logger=self.logger
                     )
@@ -530,7 +713,16 @@ class InterviewRecorder:
             if self._audio_recorder:
                 self._audio_recorder.stop()
                 if self._audio_thread:
-                    self._audio_thread.join(timeout=2.0)
+                    self._audio_thread.join(timeout=3.0) # 增加超时时间
+                    
+                    if self._audio_thread.is_alive():
+                        self.logger.error("Audio thread did not exit in time, skipping save to avoid corruption")
+                    else:
+                        # 线程结束后保存文件 (此时流已关闭，数据完整)
+                        self._audio_recorder.save_file()
+                
+                # 线程结束后，安全释放 PyAudio 资源
+                self._audio_recorder.release()
             
             # 等待线程结束
             while threading.active_count() > 1:
@@ -590,6 +782,7 @@ class InterviewRecorder:
             try:
                 cmd = [
                     "ffmpeg", "-y",
+                    "-v", "info",  # Enable info logs for ffmpeg
                     "-i", self._temp_video,
                     # 视频编码参数（确保兼容性）
                     "-c:v", "libx264",
@@ -601,12 +794,15 @@ class InterviewRecorder:
                     "-movflags", "+faststart",  # 将元数据移到文件开头
                     self._actual_save_path
                 ]
+                self.logger.info(f"Running ffmpeg video convert cmd: {' '.join(cmd)}")
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode == 0:
                     self.logger.info(f"Video converted successfully: {self._actual_save_path}")
                     return self._actual_save_path
                 else:
-                    self.logger.error(f"ffmpeg conversion failed: {result.stderr}")
+                    self.logger.error(f"ffmpeg conversion failed code={result.returncode}")
+                    self.logger.error(f"ffmpeg stdout: {result.stdout}")
+                    self.logger.error(f"ffmpeg stderr: {result.stderr}")
             except Exception as e:
                 self.logger.error(f"Failed to convert video: {e}")
             return None
@@ -642,9 +838,11 @@ class InterviewRecorder:
                         "-vsync", "cfr",  # 恒定帧率
                         temp_video2
                     ]
+                    self.logger.info(f"Running ffmpeg re-encode cmd: {' '.join(cmd)}")
                     result = subprocess.run(cmd, capture_output=True, text=True)
                     if result.returncode != 0:
-                        self.logger.error(f"Re-encoding failed: {result.stderr}")
+                        self.logger.error(f"Re-encoding failed code={result.returncode}")
+                        self.logger.error(f"ffmpeg stderr: {result.stderr}")
                         temp_video2 = self._temp_video
                     else:
                         self.logger.info(f"Video re-encoded successfully with quality CRF={self.video_quality}")
@@ -673,6 +871,7 @@ class InterviewRecorder:
                     # 音频启动晚，延迟视频（视频需要提前）
                     cmd = [
                         "ffmpeg", "-y",
+                        "-v", "info",
                         "-i", self._temp_audio,  # 输入0: 音频
                         "-itsoffset", str(time_offset), "-i", temp_video2,  # 输入1: 视频（延迟）
                         "-map", "0:a", "-map", "1:v",  # 映射音频和视频
@@ -751,10 +950,13 @@ class InterviewRecorder:
                     "-shortest",
                     self._actual_save_path
                 ]
+            self.logger.info(f"Running ffmpeg merge cmd: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode != 0:
-                self.logger.error(f"Merge failed: {result.stderr}")
+                self.logger.error(f"Merge failed code={result.returncode}")
+                self.logger.error(f"ffmpeg stdout: {result.stdout}")
+                self.logger.error(f"ffmpeg stderr: {result.stderr}")
                 return None
             
             # 清理临时文件
