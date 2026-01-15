@@ -28,6 +28,18 @@ def generate_launch_description():
         description='If true, disable all detailed ROS topics'
     )
 
+    camera_width_arg = DeclareLaunchArgument(
+        'camera_width',
+        default_value='1920',
+        description='Camera width'
+    )
+
+    camera_height_arg = DeclareLaunchArgument(
+        'camera_height',
+        default_value='1080',
+        description='Camera height'
+    )
+
     # 根据headless参数创建节点配置
     def launch_setup(context, *args, **kwargs):
 
@@ -45,6 +57,8 @@ def generate_launch_description():
             parameters=[
                 {'use_sim_time': True},
                 {'only_action': LaunchConfiguration('only_action')},
+                {'camera_width': LaunchConfiguration('camera_width')},
+                {'camera_height': LaunchConfiguration('camera_height')},
             ]
         )
 
@@ -57,5 +71,7 @@ def generate_launch_description():
     return LaunchDescription([
         *env_vars,
         only_action_arg,
+        camera_width_arg,
+        camera_height_arg,
         mujoco_launch
     ])

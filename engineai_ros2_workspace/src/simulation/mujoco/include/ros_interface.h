@@ -146,6 +146,10 @@ class RosInterface {
   bool photo_panel_position_updated_ = false;
   int photo_panel_body_id_ = -1;
 
+  // Camera resolution config
+  int camera_width_ = 1920;
+  int camera_height_ = 1080;
+
  public:
   // Update photo panel position in simulation (called from physics loop)
   void UpdatePhotoPanelPosition();

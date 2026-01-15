@@ -12,10 +12,12 @@ class RealSensePublisherNode(Node):
         super().__init__('realsense_publisher')
         
         # Declare parameters
+        # Declare parameters with dynamic typing to handle potential string inputs from launch
+        descriptor = ParameterDescriptor(dynamic_typing=True)
         self.declare_parameter('topic_name', '/camera/head/rgb/image_raw')
-        self.declare_parameter('fps', 30)
-        self.declare_parameter('width', 640)
-        self.declare_parameter('height', 480)
+        self.declare_parameter('fps', 30, descriptor)
+        self.declare_parameter('width', 640, descriptor)
+        self.declare_parameter('height', 480, descriptor)
         # 明确指定 serial_number 为字符串类型
         self.declare_parameter(
             'serial_number', 
@@ -27,11 +29,23 @@ class RealSensePublisherNode(Node):
         )
         self.declare_parameter('device_index', -1)   # 设备索引（如果 serial_number 未提供）
 
+        # Helper to safely get int parameter
+        def get_int_param(name, default_val):
+            param_val = self.get_parameter(name).get_parameter_value()
+            if param_val.type == ParameterType.PARAMETER_INTEGER:
+                return param_val.integer_value
+            elif param_val.type == ParameterType.PARAMETER_STRING:
+                try:
+                    return int(param_val.string_value)
+                except ValueError:
+                    self.get_logger().warn(f"Parameter '{name}' string value '{param_val.string_value}' is not an int. Using default.")
+            return default_val
+
         # Get parameters
         self.topic_name = self.get_parameter('topic_name').get_parameter_value().string_value
-        self.fps = self.get_parameter('fps').get_parameter_value().integer_value
-        self.width = self.get_parameter('width').get_parameter_value().integer_value
-        self.height = self.get_parameter('height').get_parameter_value().integer_value
+        self.fps = get_int_param('fps', 30)
+        self.width = get_int_param('width', 640)
+        self.height = get_int_param('height', 480)
         
         # Handle serial_number - can be string or integer (convert to string)
         serial_param = self.get_parameter('serial_number')

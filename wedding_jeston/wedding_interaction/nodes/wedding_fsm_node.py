@@ -148,6 +148,10 @@ class WeddingFSMNode(Node):
         # Face Tracker Params
         self.declare_parameter('face_tracker_pos_match_threshold', 0.3)
         
+        # Audio Device Config
+        self.declare_parameter('audio_device_id', -1)
+        self.declare_parameter('alsa_card_id', 0)
+        
         # Load local variables for timer init
         fsm_rate = self.get_parameter('fsm_rate').value
         state_pub_rate = self.get_parameter('state_pub_rate').value
@@ -157,6 +161,10 @@ class WeddingFSMNode(Node):
             'enable_action': self.get_parameter('enable_action').value,
             'enable_speech': self.get_parameter('enable_speech').value,
             'audio_dir': self.get_parameter('audio_dir').value,
+            
+            # Audio Config
+            'audio_device_id': self.get_parameter('audio_device_id').value,
+            'alsa_card_id': self.get_parameter('alsa_card_id').value,
             
             # Idle
             'idle_switch_interval_min': self.get_parameter('idle_switch_interval_min').value,

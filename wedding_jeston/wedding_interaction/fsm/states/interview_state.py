@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Optional
 from ..enums import WeddingStateName, WeddingEvent
 from ..wedding_state import WeddingState
 from .interview_recorder import InterviewRecorder, init_hardware_mixer
+from .mock_recorder import MockInterviewRecorder
+from std_msgs.msg import Float32
 
 if TYPE_CHECKING:
     from ..wedding_fsm import WeddingFSM
@@ -94,6 +96,10 @@ class InterviewState(WeddingState):
         self.mic_gain = config.get('interview_mic_gain', 2.0)
         self.auto_init_alsa = config.get('interview_auto_init_alsa', True)
         
+        # 音频设备参数
+        self.audio_device_id = config.get('audio_device_id', -1)
+        self.alsa_card_id = config.get('alsa_card_id', 0)
+        
         # 丢失超时 (Interview 需要较强的粘性)
         self.lost_timeout = config.get('interview_lost_timeout', 3.0)
         
@@ -107,16 +113,48 @@ class InterviewState(WeddingState):
             self.recording_save_path = config_save_path
         else:
             self.recording_save_path = default_save_path
-    
+            
+        # Debug/Simulation config
+        self.use_mock_audio = config.get('use_mock_audio', False)
+        self.mock_scenario = config.get('mock_scenario', 'A')
+        if self.use_mock_audio:
+            self.log(f"WARNING: Using Mock Audio Recorder (Scenario: {self.mock_scenario})")
+            
+        # 4. 环境噪音订阅
+        self.ambient_noise_sub = None
+        self.current_ambient_noise = 0.0
+        
+    def _noise_callback(self, msg: Float32):
+        self.current_ambient_noise = msg.data
+        # Adaptive threshold: 1.5x noise + margin
+        # Clamp to [0.02, 0.15]
+        new_thresh = max(0.02, min(0.15, self.current_ambient_noise * 1.5 + 0.01))
+        
+        # Log only on significant change to avoid spam
+        if abs(new_thresh - self._voice_threshold) > 0.005:
+            self._voice_threshold = new_thresh
+            if self.iter_count % 30 == 0: # Log occasionally
+                self.log(f"Adaptive VAD: Noise={self.current_ambient_noise:.4f}, Threshold={self._voice_threshold:.4f}")
+        else:
+            self._voice_threshold = new_thresh
+
     def on_enter(self) -> None:
         """进入采访状态"""
         self.log("Entering INTERVIEW state")
         self.iter_count = 0
         self.enter_time = self.fsm.get_current_time()
         
-        # 0. 初始化硬件麦克风 (如果配置启用)
-        if self.auto_init_alsa:
-            init_hardware_mixer(self.logger)
+        # Subscribe to ambient noise
+        if hasattr(self.fsm, 'node') and self.fsm.node:
+             self.ambient_noise_sub = self.fsm.node.create_subscription(
+                 Float32,
+                 '/perception/ambient_noise_level',
+                 self._noise_callback,
+                 10
+             )
+        
+        if self.auto_init_alsa and not self.use_mock_audio:
+            init_hardware_mixer(self.alsa_card_id, self.logger)
         
         # 1. 启动录制
         self._start_recording()
@@ -141,35 +179,6 @@ class InterviewState(WeddingState):
              self.fsm.data.perception.target_face_id = locked_target.face_id
              # state used by check_transition implicitly
         else:
-            # 如果没有转交的目标 (e.g. 强制进入)，尝试保持现有目标?
-            # 这里的逻辑是 Interview 必须有个明确目标。
-            # 假设 FaceTracker 已经有目标了? 我们 set_target 会覆盖。
-            # 如果 locked_target 是 None (e.g. 语音命令)，我们希望 FaceTracker 继续跟踪当前目标?
-            # "fsm.data.perception.locked_target" 只有 SEARCH -> TRACKING 会设置。
-            # TRACKING -> INTERVIEW 没有设置 locked_target 吗?
-            # 检查 SearchState: fsm.data.perception.locked_target = locked.
-            # TrackingState: 读取它, 但没有更新它。
-            # 所以 locked_target 是最初的那个。
-            # 但是 Tracking 过程中 ID 可能变了 (Reselect/Recovery)。
-            # 所以我们应该用 FaceTracker 当前的目标? 
-            # FaceTracker 是全局的，如果从 TRACKING 过来，target 就在 Tracker 里。
-            # 我们不需要 set_target! !
-            # UNLESS we come from IDLE directly with a locked target?
-            # 我们的 FSM 设计：TRACKING -> INTERVIEW. Tracker 状态应该保持。
-            # Search -> (locked) -> Tracking -> (timeout) -> Interview.
-            # 如果我们不调用 set_target, Tracker 保持原样。
-            # 但是 TrackingState on_enter 加载了 locked_target.
-            # 如果 Tracking 运行了很久，Tracker 里的目标是最新的。
-            # 如果我们这里重新 set_target(locked_target)，可能会回滚到旧 ID?
-            # NO. locked_target is persistent in data context.
-            # 实际上 TrackingState 没有更新 locked_target.
-            # 这是一个潜在 BUG。如果我们不更新 locked_target，Interview 用的是旧的。
-            # 解决方案: 直接使用 FaceTracker 的当前目标，不需要 set_target。
-            # 只要 FaceTracker 不被 Reset。
-            # SearchState calls reset(). TrackingState doesn't. InterviewState shouldn't.
-            # 但是如果 Interview 直接从 Command 触发 (IDLE -> INTERVIEW)?
-            # 这种情况下 FaceTracker 可能是空的。
-            # 我们应该检查 Tracker 是否有目标。
             pass
             
         if not self.fsm.face_tracker.has_target:
@@ -257,25 +266,24 @@ class InterviewState(WeddingState):
                     timeout = True
                     self.log(f"No speech detected timeout ({listening_duration:.1f}s)")
             else:
-                # 情况2：用户已经开始说话
-                # 检查是否回答完成 (VAD silence)
+                # Situation 2: The user has already started speaking
+                # Check if the answer is complete (VAD silence)
                 if silence_duration > self.silence_threshold:
                     answered = True
                     self.log(f"Answer finished (silence: {silence_duration:.2f}s)")
                 
-                # 检查是否说话时间太长 (Max Speech Duration)
-                # 注意：listening_duration 包含了开始前的等待时间，
-                # 但只要用户开口了，我们允许的总时长由 speech_max_duration 控制
-                # (或者更精确地： max_duration 从 has_spoken=True 开始算? 
-                #  简单起见，从 phase start 算比较安全，避免一直不说话还一直占着)
-                # 更合理的逻辑：
+                # Check if speaking time is too long (Max Speech Duration)
+                # Note: listening_duration includes wait time before start,
+                # but as long as user spoke, we allow total duration controlled by speech_max_duration
+                # (or more precisely: max_duration counted from phase start is safer to avoid blocking)
+                # More reasonable logic:
                 #   Start -> First Voice: limit by no_speech_timeout
                 #   First Voice -> End: limit by speech_max_duration (counting from First Voice)
                 
-                # 这里简化实现：如果说话了，总时长限制放宽到 speech_max_duration
-                # 因为 speech_max_duration (30s) 通常远大于 no_speech_timeout (8s)
+                # Simplified implementation: if spoke, relax total duration limit to speech_max_duration
+                # Since speech_max_duration (30s) is usually much larger than no_speech_timeout (8s)
                 if listening_duration > self.speech_max_duration:
-                    timeout = True # 强行打断
+                    timeout = True # Force interrupt
                     self.log(f"Speech max duration exceeded ({listening_duration:.1f}s)")
             
             if answered or timeout:  
@@ -285,6 +293,8 @@ class InterviewState(WeddingState):
                 else:
                     self._enter_phase(self.PHASE_ENDING)
                     self.set_speech("interview_thanks")
+                    # Change pose to neutral immediately after saying thanks
+                    self.execute_action("neutral")
                 
         elif self.phase == self.PHASE_ENDING:
             if phase_elapsed >= self.ending_duration:
@@ -336,18 +346,25 @@ class InterviewState(WeddingState):
             if test_frame is not None:
                 video_size = (test_frame.shape[1], test_frame.shape[0])
             
-            self._recorder = InterviewRecorder(
-                save_path=self.recording_save_path,
-                video_size=video_size,
-                video_fps=30,
-                audio_sample_rate=self.audio_sample_rate,
-                camera_index=None,
-                frame_callback=self._get_video_frame,
-                video_quality=18,
-                audio_gain=self.mic_gain,
-                enable_beauty=self.fsm.data.config.get('interview_enable_beauty', True),
-                logger=self.logger
-            )
+            if self.use_mock_audio:
+                self._recorder = MockInterviewRecorder(
+                    save_path=self.recording_save_path,
+                    scenario=self.mock_scenario,
+                    logger=self.logger
+                )
+            else:
+                self._recorder = InterviewRecorder(
+                    save_path=self.recording_save_path,
+                    video_size=video_size,
+                    video_fps=30,
+                    audio_sample_rate=self.audio_sample_rate,
+                    camera_index=None,
+                    frame_callback=self._get_video_frame,
+                    video_quality=18,
+                    audio_gain=self.mic_gain,
+                    audio_device_index=self.audio_device_id,
+                    logger=self.logger
+                )
             
             if self._recorder.start():
                 self.log(f"Recording started. Saving to: {self.recording_save_path}")
@@ -406,3 +423,9 @@ class InterviewState(WeddingState):
         self.log("Exiting INTERVIEW state")
         self._stop_recording()
         self.stop_action() # Reset to neutral/stop via ActionManager or logic
+        
+        # Cleanup subscription
+        if self.ambient_noise_sub:
+            if hasattr(self.fsm, 'node') and self.fsm.node:
+                 self.fsm.node.destroy_subscription(self.ambient_noise_sub)
+            self.ambient_noise_sub = None

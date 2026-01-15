@@ -262,8 +262,22 @@ class PerceptionNode(Node):
         if image is None:
             return
         
+        # [Optimization] Resize image if too large (e.g. 1080p -> 320 width)
+        # MediaPipe BlazeFace uses 128x128 input natively.
+        # Resizing to 320 width (approx 320x180) is sufficient for detection
+        # and significantly reduces DDS/SHM load compared to 1080p (6MB -> 0.17MB).
+        process_img = image
+        h, w = image.shape[:2]
+        target_w = 320  # Optimized based on MediaPipe requirements (128px)
+        
+        if w > target_w:
+            scale = target_w / w
+            target_h = int(h * scale)
+            process_img = cv2.resize(image, (target_w, target_h))
+            # self.get_logger().debug(f"Downscaled image for detection: {w}x{h} -> {target_w}x{target_h}")
+            
         # 人脸检测
-        faces = self._face_detector.detect(image)
+        faces = self._face_detector.detect(process_img)
         
         # 打印检测结果（每帧都打印，用于调试face_id变化）
         if faces:

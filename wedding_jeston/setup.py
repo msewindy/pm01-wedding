@@ -32,6 +32,7 @@ setup(
             'perception_node = wedding_interaction.nodes.perception_node:main',
             'perception_visualizer = wedding_interaction.nodes.perception_visualizer_node:main',
             'realsense_publisher = wedding_interaction.nodes.realsense_publisher_node:main',
+            'ambient_noise_node = wedding_interaction.nodes.ambient_noise_node:main',
         ],
     },
 )

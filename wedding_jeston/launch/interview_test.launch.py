@@ -70,6 +70,29 @@ def generate_launch_description():
         default_value='true',
         description='Enable RealSense camera publisher'
     )
+
+    enable_ambient_noise_arg = DeclareLaunchArgument(
+        'enable_ambient_noise',
+        default_value='false',
+        description='Whether to enable ambient noise detection'
+    )
+    
+    # RealSense Config
+    realsense_width_arg = DeclareLaunchArgument(
+        'realsense_width',
+        default_value='1920',
+        description='RealSense image width'
+    )
+    realsense_height_arg = DeclareLaunchArgument(
+        'realsense_height',
+        default_value='1080',
+        description='RealSense image height'
+    )
+    realsense_fps_arg = DeclareLaunchArgument(
+        'realsense_fps',
+        default_value='30',
+        description='RealSense FPS'
+    )
     
     # 各节点独立的日志级别参数
     perception_node_log_level_arg = DeclareLaunchArgument(
@@ -108,7 +131,12 @@ def generate_launch_description():
         description='Log level for realsense_publisher_node (debug, info, warn, error, fatal)'
     )
     
-
+    ambient_noise_log_level_arg = DeclareLaunchArgument(
+        'ambient_noise_log_level',
+        default_value='warn',
+        description='Log level for ambient_noise_node (debug, info, warn, error, fatal)'
+    )
+    
     
     # 音频资源目录
     audio_dir = os.path.join(
@@ -132,6 +160,9 @@ def generate_launch_description():
         enable_action_arg,
         enable_speech_arg,
         enable_realsense_arg,
+        realsense_width_arg,
+        realsense_height_arg,
+        realsense_fps_arg,
         enable_visualization_arg,
         perception_node_log_level_arg,
         fsm_node_log_level_arg,
@@ -139,18 +170,22 @@ def generate_launch_description():
         speech_player_log_level_arg,
         perception_visualizer_log_level_arg,
         realsense_log_level_arg,
+        enable_ambient_noise_arg,
+        ambient_noise_log_level_arg,
         
         # 日志
         LogInfo(msg=['Starting Interview test environment...']),
         LogInfo(msg=['FSM rate: ', LaunchConfiguration('fsm_rate'), ' Hz']),
         LogInfo(msg=['Image topic: ', LaunchConfiguration('image_topic')]),
         LogInfo(msg=['RealSense enabled: ', LaunchConfiguration('enable_realsense')]),
+        LogInfo(msg=['Ambient Noise enabled: ', LaunchConfiguration('enable_ambient_noise')]),
         LogInfo(msg=['Perception node log level: ', LaunchConfiguration('perception_node_log_level')]),
         LogInfo(msg=['FSM node log level: ', LaunchConfiguration('fsm_node_log_level')]),
         LogInfo(msg=['Motion adapter log level: ', LaunchConfiguration('motion_adapter_log_level')]),
         LogInfo(msg=['Speech player log level: ', LaunchConfiguration('speech_player_log_level')]),
         LogInfo(msg=['Perception visualizer log level: ', LaunchConfiguration('perception_visualizer_log_level')]),
         LogInfo(msg=['RealSense log level: ', LaunchConfiguration('realsense_log_level')]),
+        LogInfo(msg=['Ambient noise log level: ', LaunchConfiguration('ambient_noise_log_level')]),
         
         # RealSense 发布节点 (可选)
         Node(
@@ -161,9 +196,9 @@ def generate_launch_description():
             arguments=['--ros-args', '--log-level', LaunchConfiguration('realsense_log_level')],
             parameters=[config_file, {
                 'topic_name': LaunchConfiguration('image_topic'),
-                # 'fps': 30,
-                # 'width': 640,
-                # 'height': 480
+                'width': LaunchConfiguration('realsense_width'),
+                'height': LaunchConfiguration('realsense_height'),
+                'fps': LaunchConfiguration('realsense_fps'),
             }],
             condition=IfCondition(LaunchConfiguration('enable_realsense')),
         ),
@@ -180,6 +215,18 @@ def generate_launch_description():
                 'image_topic': LaunchConfiguration('image_topic'),
             }],
         ),
+
+        # 环境噪音检测节点
+        Node(
+            condition=IfCondition(LaunchConfiguration('enable_ambient_noise')),
+            package='wedding_interaction',
+            executable='ambient_noise_node',
+            name='ambient_noise_node',
+            output='screen',
+            parameters=[config_file],
+            arguments=['--ros-args', '--log-level', LaunchConfiguration('ambient_noise_log_level')],
+        ),
+
         
         # FSM 节点
         Node(

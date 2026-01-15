@@ -40,7 +40,7 @@ class PhotoPanelKeyboardControl(Node):
     """Photo Panel 键盘控制节点"""
     
     # 初始位置（更近以增大人脸像素）
-    INITIAL_X = 1.5
+    INITIAL_X = 1.0
     INITIAL_Y = 0.0
     INITIAL_Z = 1.5
     

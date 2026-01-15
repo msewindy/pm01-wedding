@@ -33,6 +33,17 @@ bool RosInterface::Initialize() {
   // Check parameters
   node_->declare_parameter("only_action", false);
   only_action_ = node_->get_parameter("only_action").as_bool();
+
+  // Declare camera resolution parameters
+  node_->declare_parameter("camera_width", 1920);
+  node_->declare_parameter("camera_height", 1080);
+  
+  if (node_->has_parameter("camera_width")) {
+    camera_width_ = node_->get_parameter("camera_width").as_int();
+  }
+  if (node_->has_parameter("camera_height")) {
+    camera_height_ = node_->get_parameter("camera_height").as_int();
+  }
   
   // Create subscriber with more compatible QoS settings
   using std::placeholders::_1;
@@ -256,6 +267,19 @@ void RosInterface::UpdateSimState(const mjModel* m, mjData* d) {
 void RosInterface::SetModelAndData(mjModel* model, mjData* data) {
   model_ = model;
   data_ = data;
+  
+  // Ensure offscreen buffer is large enough for camera
+  // This must be done BEFORE the main simulation context is created/recreated
+  if (model_) {
+      if (model_->vis.global.offwidth < camera_width_) {
+          model_->vis.global.offwidth = camera_width_;
+          RCLCPP_INFO(node_->get_logger(), "Increased model offwidth to %d", camera_width_);
+      }
+      if (model_->vis.global.offheight < camera_height_) {
+          model_->vis.global.offheight = camera_height_;
+          RCLCPP_INFO(node_->get_logger(), "Increased model offheight to %d", camera_height_);
+      }
+  }
 }
 
 void RosInterface::MotionStateTimerCallback() {
@@ -309,8 +333,11 @@ bool RosInterface::InitializeCamera(const mjModel* model, mjrContext* shared_con
   // 640x480: ~4Hz (卡顿), 320x240: ~15Hz (流畅), 160x120: ~30Hz (最流畅)
   CameraConfig config;
   config.name = "head_rgbd_camera";
-  config.width = 640;   // RealSense D435i 常用分辨率
-  config.height = 480;
+  
+  config.width = camera_width_;
+  config.height = camera_height_;
+  
+  RCLCPP_INFO(node_->get_logger(), "Camera Config Resolution: %dx%d", config.width, config.height);
   config.publish_rate = 30.0;
   config.near_clip = 0.01f;
   config.far_clip = 10.0f;

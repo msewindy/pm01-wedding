@@ -31,6 +31,8 @@ try:
 except ImportError:
     PYAUDIO_AVAILABLE = False
 
+from ...utils.audio_utils import find_audio_device, get_alsa_card_index_from_info
+
 
 # ========== ALSA Error Suppression ==========
 # ALSA/PyAudio tends to spam "unable to open slave" errors to stderr.
@@ -58,7 +60,7 @@ def no_alsa_err():
         yield
 
 
-def init_hardware_mixer(logger=None):
+def init_hardware_mixer(card_id=0, logger=None):
     """
     执行硬件混音器初始化命令 (ALSA)
     主要用于开启 USB 麦克风的 Capture Switch 和设置最大音量
@@ -67,20 +69,19 @@ def init_hardware_mixer(logger=None):
         logger = logging.getLogger("System")
         
     try:
-        # 1. 开启 Mic Capture Switch (索引 ID 为 3)，该开关默认是关闭的
-        # 注意：-c 0 假设 USB 麦克风是 0 号声卡。如果在其他机器上可能需要调整。
-        cmd_switch = ["amixer", "-c", "0", "cset", "numid=3", "on"]
+        # 1. 开启 Mic Capture Switch (numid=3)，该开关默认是关闭的
+        cmd_switch = ["amixer", "-c", str(card_id), "cset", "numid=3", "on"]
         subprocess.run(cmd_switch, check=True, capture_output=True)
         
         # 2. 确保硬件捕获音量已取消静音并设为 100%
-        cmd_vol = ["amixer", "-c", "0", "sset", "Mic", "100%", "unmute"]
+        cmd_vol = ["amixer", "-c", str(card_id), "sset", "Mic", "100%", "unmute"]
         subprocess.run(cmd_vol, check=True, capture_output=True)
         
-        logger.info("ALSA hardware mixer initialized successfully (Capture Switch=ON, Vol=100%)")
+        logger.info(f"ALSA hardware mixer initialized successfully for Card {card_id}")
     except subprocess.CalledProcessError as e:
-        logger.warning(f"Failed to set ALSA mixer (cmd failed): {e}")
+        logger.warning(f"Failed to set ALSA mixer for Card {card_id} (cmd failed): {e}")
     except Exception as e:
-        logger.warning(f"Failed to set ALSA mixer: {e}")
+        logger.warning(f"Failed to set ALSA mixer for Card {card_id}: {e}")
 
 
 # ========== PyAudio Singleton ==========
@@ -127,7 +128,6 @@ class VideoRecorder:
                  fps: int = 30,
                  frame_callback: Optional[Callable] = None,
                  start_event: Optional[threading.Event] = None,
-                 enable_beauty: bool = False,
                  logger: Optional[logging.Logger] = None):
         """
         初始化视频录制器
@@ -140,7 +140,6 @@ class VideoRecorder:
             fps: 帧率
             frame_callback: 帧回调函数（返回OpenCV格式的frame，或None）
             start_event: 同步启动事件（用于与音频同步）
-            enable_beauty: 是否启用美颜滤镜
             logger: 日志记录器
         """
         self.open = True
@@ -153,7 +152,6 @@ class VideoRecorder:
         self.start_time = 0.0  # 将在record()中设置
         self.frame_callback = frame_callback
         self.start_event = start_event
-        self.enable_beauty = enable_beauty
         self.logger = logger or logging.getLogger("VideoRecorder")
         
         # 初始化视频写入器
@@ -184,22 +182,6 @@ class VideoRecorder:
             self.video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, sizey)
             self.video_cap.set(cv2.CAP_PROP_FPS, fps)
             
-    def _apply_beauty_filter(self, frame):
-        """
-        应用简单的美颜滤镜 (双边滤波)
-        """
-        try:
-            # 双边滤波：保留边缘的同时平滑区域 (磨皮)
-            # d: 邻域直径 (此值越大越慢)
-            # sigmaColor: 颜色空间的标准差 (值越大，颜色混合越强)
-            # sigmaSpace: 坐标空间的标准差 (值越大，远处像素影响越强)
-            # 参数调优建议: d=5-9 (实时性), sigmaColor=75, sigmaSpace=75
-            
-            # 使用较小的 d 值以保证实时性
-            return cv2.bilateralFilter(frame, d=7, sigmaColor=75, sigmaSpace=75)
-        except Exception:
-            return frame
-    
     def record(self):
         """视频录制循环（在线程中运行）"""
         # 等待同步启动信号
@@ -230,10 +212,6 @@ class VideoRecorder:
                             # INTER_CUBIC 质量更好但稍慢，INTER_LINEAR 是平衡选择
                             frame = cv2.resize(frame, self.frameSize, interpolation=cv2.INTER_LINEAR)
                             
-                        # 应用美颜 (如果启用)
-                        if self.enable_beauty:
-                            frame = self._apply_beauty_filter(frame)
-                            
                         self.video_out.write(frame)
                         self.frame_counts += 1
                         next_frame_time += frame_interval
@@ -255,9 +233,6 @@ class VideoRecorder:
                     if self.frame_counts == 0:
                         self.logger.info(f"First frame captured from camera. Size: {video_frame.shape}")
                     
-                    if self.enable_beauty:
-                        video_frame = self._apply_beauty_filter(video_frame)
-                        
                     self.video_out.write(video_frame)
                     self.frame_counts += 1
                     # 使用精确的时间控制
@@ -313,11 +288,7 @@ class AudioRecorder:
             rate: 采样率
             fpb: 每帧采样数
             channels: 声道数
-            filename: 输出音频文件名
-            rate: 采样率
-            fpb: 每帧采样数
-            channels: 声道数
-            input_device_index: 输入设备索引（None表示使用默认设备）
+            input_device_index: 输入设备索引（None=默认，-1=自动检测USB）
             gain: 软件数字增益倍数 (1.0 = 原始音量)
             start_event: 同步启动事件（用于与视频同步）
             logger: 日志记录器
@@ -343,15 +314,40 @@ class AudioRecorder:
         if self.audio is None:
              raise RuntimeError("无法初始化 PyAudio")
         
-        # 如果没有指定输入设备，尝试使用默认输入设备
-        if input_device_index is None:
-            try:
-                input_device_index = self.audio.get_default_input_device_info()['index']
-                device_info = self.audio.get_device_info_by_index(input_device_index)
-                self.logger.info(f"使用默认音频输入设备: {device_info['name']}")
-            except Exception as e:
-                self.logger.warning(f"无法获取默认音频输入设备: {e}")
-                input_device_index = None
+        # 使用通用工具查找设备
+        # 注意: 如果 input_device_index 为 None, 这里的逻辑可能需要调整以匹配 find_audio_device 的行为
+        # 我们的 find_audio_device 接受 device_id_param (-1 for auto)
+        # 兼容旧逻辑：如果 input_device_index is None, 视为 -1 (Auto detect USB) or Default?
+        # 通常 AudioRecorder(input_device_index=None) 意味着使用系统默认。
+        # 但我们希望统一逻辑。如果 passed None, we default to system default? 
+        # 用户界面传进来的是 audio_device_id (-1 auto). 
+        # 所以我们这里 input_device_index 直接透传给 find_audio_device.
+        # find_audio_device handles -1 (auto search) and >=0 (manual).
+        # find_audio_device doesn't handle None explicitely as 'system default', 
+        # but if we pass -1 it looks for USB. 
+        # If we want pure system default, we should pass something else or modify find_audio_device.
+        # But 'unify' means using the same logic. So we should use find_audio_device.
+        
+        target_device_index = input_device_index if input_device_index is not None else -1
+        
+        actual_index, device_info = find_audio_device(
+            self.audio, 
+            device_id_param=target_device_index,
+            target_name="USB Audio", 
+            logger=self.logger
+        )
+        
+        if actual_index is None:
+             # Fallback to default if utility failed? (Utility keeps logging but returns None if critical fail)
+             # But utility usually falls back to default if USB not found.
+             # If it returns None, it really failed.
+             self.logger.warning("find_audio_device failed to return valid index. Trying system default.")
+             try:
+                 actual_index = self.audio.get_default_input_device_info()['index']
+             except:
+                 pass
+
+        self.logger.info(f"AudioRecorder using device index: {actual_index}")
         
         # 打开音频流
         try:
@@ -360,12 +356,12 @@ class AudioRecorder:
                 channels=self.channels,
                 rate=self.rate,
                 input=True,
-                input_device_index=input_device_index,
+                input_device_index=actual_index,
                 frames_per_buffer=self.frames_per_buffer
             )
         except Exception as e:
             # self.audio.terminate() # Do not terminate singleton
-            raise RuntimeError(f"无法打开音频输入设备: {e}")
+            raise RuntimeError(f"无法打开音频输入设备 (idx={actual_index}): {e}")
         
         self.audio_frames = []
     
@@ -503,7 +499,7 @@ class InterviewRecorder:
 
                  video_quality: int = 18,  # CRF 值：18=高质量，23=中等质量，28=低质量
                  audio_gain: float = 1.0,
-                 enable_beauty: bool = True,  # 默认开启美颜
+                 audio_device_index: int = -1, # PyAudio Device Index
                  logger: Optional[logging.Logger] = None):
         """
         初始化录制器
@@ -517,7 +513,7 @@ class InterviewRecorder:
             frame_callback: 帧回调函数（返回OpenCV格式的frame）
             video_quality: 视频质量（CRF值，18=高质量，23=中等质量，28=低质量）
             audio_gain: 音频软件增益
-            enable_beauty: 是否开启美颜
+            audio_device_index: 音频设备索引 (PyAudio)
             logger: 日志记录器
         """
         self.save_path = save_path
@@ -529,7 +525,7 @@ class InterviewRecorder:
         self.frame_callback = frame_callback
         self.video_quality = video_quality  # CRF 值，用于 ffmpeg 编码
         self.audio_gain = audio_gain
-        self.enable_beauty = enable_beauty
+        self.audio_device_index = audio_device_index
         
         # 录制状态
         self._is_recording = False
@@ -539,7 +535,7 @@ class InterviewRecorder:
         self._audio_thread: Optional[threading.Thread] = None
         
         # 录制参数
-        self.max_duration = 120.0  # 最大录制时长（秒）
+        self.max_duration = 300.0  # 最大录制时长（秒）
         self.min_duration = 5.0   # 最小录制时长（秒）
         
         # 录制统计
@@ -607,7 +603,6 @@ class InterviewRecorder:
                         fps=self.video_fps,
                         frame_callback=self.frame_callback,
                         start_event=self._start_event,
-                        enable_beauty=self.enable_beauty,
                         logger=self.logger
                     )
                     self._video_thread = self._video_recorder.start()
@@ -623,6 +618,7 @@ class InterviewRecorder:
                         filename=self._temp_audio,
                         rate=self.audio_sample_rate,
                         gain=self.audio_gain,
+                        input_device_index=self.audio_device_index,
                         start_event=self._start_event,
                         logger=self.logger
                     )
