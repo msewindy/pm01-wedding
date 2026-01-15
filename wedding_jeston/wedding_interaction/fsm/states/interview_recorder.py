@@ -1039,58 +1039,38 @@ class InterviewRecorder:
             
             # 构建ffmpeg命令，使用更好的同步选项和兼容性参数
             # 如果时间差超过50ms，使用itsoffset补偿
-            if abs(time_offset) > 0.01:
-                if time_offset > 0:
-                    # 视频启动早，延迟视频
-                    cmd = [
-                        "nice", "-n", "19",
-                        "ffmpeg", "-y",
-                        "-v", "info",
-                        "-i", self._temp_audio,
-                        "-itsoffset", str(time_offset), "-i", temp_video2,
-                        "-map", "0:a", "-map", "1:v",
-                    ] + self._encoder_config['flags'] + [
-                        "-movflags", "+faststart",
-                        "-c:a", "aac",
-                        "-b:a", "192k",
-                        "-ac", "2",
-                        "-ar", "44100",
-                        "-channel_layout", "stereo",
-                        "-async", "1",
-                        "-vsync", "cfr",
-                        "-shortest",
-                        self._actual_save_path
-                    ]
-                    self.logger.info(f"Applying video delay compensation: {time_offset*1000:.1f}ms")
+            # 定义构建命令的内部函数
+            def build_merge_cmd(encoder_flags):
+                # 基础参数
+                base_cmd = ["nice", "-n", "19", "ffmpeg", "-y"]
+                
+                if abs(time_offset) > 0.01:
+                    if time_offset > 0:
+                        # 视频启动早，延迟视频
+                        inputs = [
+                            "-v", "info",
+                            "-i", self._temp_audio,
+                            "-itsoffset", str(time_offset), "-i", temp_video2,
+                            "-map", "0:a", "-map", "1:v"
+                        ]
+                        self.logger.info(f"Applying video delay compensation: {time_offset*1000:.1f}ms")
+                    else:
+                        # 视频启动晚，延迟音频
+                        inputs = [
+                            "-itsoffset", str(-time_offset), "-i", self._temp_audio,
+                            "-i", temp_video2,
+                            "-map", "0:a", "-map", "1:v"
+                        ]
+                        self.logger.info(f"Applying audio delay compensation: {-time_offset*1000:.1f}ms")
                 else:
-                    # 视频启动晚，延迟音频
-                    cmd = [
-                        "nice", "-n", "19",
-                        "ffmpeg", "-y",
-                        "-itsoffset", str(-time_offset), "-i", self._temp_audio,
+                    # 直接合并
+                    inputs = [
+                        "-i", self._temp_audio,
                         "-i", temp_video2,
-                        "-map", "0:a", "-map", "1:v",
-                    ] + self._encoder_config['flags'] + [
-                        "-movflags", "+faststart",
-                        "-c:a", "aac",
-                        "-b:a", "192k",
-                        "-ac", "2",
-                        "-ar", "44100",
-                        "-channel_layout", "stereo",
-                        "-async", "1",
-                        "-vsync", "cfr",
-                        "-shortest",
-                        self._actual_save_path
                     ]
-                    self.logger.info(f"Applying audio delay compensation: {-time_offset*1000:.1f}ms")
-            else:
-                # 直接合并
-                cmd = [
-                    "nice", "-n", "19",
-                    "ffmpeg", "-y",
-                    "-i", self._temp_audio,
-                    "-i", temp_video2,
-                ] + self._encoder_config['flags'] + [
+                
+                # 公共输出参数
+                output_options = [
                     "-movflags", "+faststart",
                     "-c:a", "aac",
                     "-b:a", "192k",
@@ -1102,13 +1082,50 @@ class InterviewRecorder:
                     "-shortest",
                     self._actual_save_path
                 ]
-            self.logger.info(f"Running ffmpeg merge cmd: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                return base_cmd + inputs + encoder_flags + output_options
+
+            # 尝试策略：首先尝试自动检测的编码器，如果失败则回退到 libx264
+            encoders_to_try = []
             
-            if result.returncode != 0:
-                self.logger.error(f"Merge failed code={result.returncode}")
-                self.logger.error(f"ffmpeg stdout: {result.stdout}")
-                self.logger.error(f"ffmpeg stderr: {result.stderr}")
+            # 1. 优先尝试检测到的最佳编码器
+            encoders_to_try.append({
+                "name": self._encoder_config['name'],
+                "flags": self._encoder_config['flags']
+            })
+            
+            # 2. 如果最佳编码器不是 libx264，则添加 libx264 作为回退
+            if self._encoder_config['name'] != "libx264":
+                encoders_to_try.append({
+                    "name": "libx264_fallback",
+                    "flags": [
+                        "-c:v", "libx264", 
+                        "-preset", "fast", 
+                        "-crf", str(self.video_quality),
+                        "-profile:v", "high",
+                        "-pix_fmt", "yuv420p"
+                    ]
+                })
+
+            success = False
+            for encoder in encoders_to_try:
+                self.logger.info(f"Attempting merge with encoder: {encoder['name']}")
+                cmd = build_merge_cmd(encoder['flags'])
+                
+                self.logger.info(f"Running ffmpeg merge cmd: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    success = True
+                    self.logger.info(f"Merge successful with {encoder['name']}")
+                    break
+                else:
+                    self.logger.warning(f"Merge failed with {encoder['name']} (code={result.returncode})")
+                    self.logger.warning(f"ffmpeg stderr: {result.stderr}")
+                    # 继续尝试下一个编码器
+            
+            if not success:
+                self.logger.error("All merge attempts failed.")
                 return None
             
             # 清理临时文件
