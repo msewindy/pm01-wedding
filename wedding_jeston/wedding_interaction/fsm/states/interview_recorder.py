@@ -604,27 +604,19 @@ class InterviewRecorder:
         self._start_event = threading.Event()
 
     def _detect_video_encoder(self):
-        """检测可用的最佳视频编码器及其参数"""
+        """
+        检测视频编码器
+        
+        注意：根据测试，Jetson 上的 h264_v4l2m2m 和 h264_nvmpi 均不可用（报错无法找到设备）。
+        因此，我们在 Jetson 上强制使用高度优化的 libx264 (ultrafast preset)。
+        在台式机上保留 h264_nvenc 支持。
+        """
         try:
             cmd = ["ffmpeg", "-encoders"]
             result = subprocess.run(cmd, capture_output=True, text=True)
             output = result.stdout
             
-            # 优先级 1: Jetson NVMPI (最高效)
-            if "h264_nvmpi" in output:
-                return {
-                    "name": "h264_nvmpi",
-                    "flags": ["-c:v", "h264_nvmpi", "-b:v", "6M"] 
-                }
-            
-            # 优先级 2: Jetson/Linux V4L2 Hardware
-            if "h264_v4l2m2m" in output:
-                return {
-                    "name": "h264_v4l2m2m",
-                    "flags": ["-c:v", "h264_v4l2m2m", "-b:v", "6M", "-pix_fmt", "yuv420p"]
-                }
-                
-            # 优先级 3: Desktop NVIDIA NVENC
+            # 优先级 1: Desktop NVIDIA NVENC (台式机可用)
             if "h264_nvenc" in output:
                 return {
                     "name": "h264_nvenc",
@@ -636,22 +628,17 @@ class InterviewRecorder:
                         "-pix_fmt", "yuv420p"
                     ]
                 }
-                
-            # 优先级 4: Raspberry Pi
-            if "h264_omx" in output:
-                return {
-                    "name": "h264_omx",
-                    "flags": ["-c:v", "h264_omx", "-b:v", "4M"]
-                }
 
-            # 默认: 软件编码 libx264 (兼容性最好，但吃CPU)
+            # 默认 & Jetson: 优化的软件编码
+            # 使用 ultrafast 预设和限制线程数，确保不卡顿系统
             return {
-                "name": "libx264",
+                "name": "libx264-ultrafast",
                 "flags": [
                     "-c:v", "libx264", 
-                    "-preset", "fast", 
-                    "-crf", str(self.video_quality),
-                    "-profile:v", "high",
+                    "-preset", "ultrafast",  # 牺牲画质/体积换取极高速度和低CPU占用
+                    "-crf", "28",           # 稍微降低画质以进一步减轻负载
+                    "-threads", "4",        # 限制线程数，防止占满CPU
+                    "-profile:v", "baseline", # 使用最简单的 profile
                     "-pix_fmt", "yuv420p"
                 ]
             }
@@ -659,7 +646,7 @@ class InterviewRecorder:
             self.logger.error(f"Failed to detect encoder: {e}, falling back to libx264")
             return {
                 "name": "libx264",
-                "flags": ["-c:v", "libx264", "-preset", "fast", "-crf", str(self.video_quality)]
+                "flags": ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "4"]
             }
     
     def start(self) -> bool:
