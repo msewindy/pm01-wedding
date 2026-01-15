@@ -977,85 +977,106 @@ class InterviewRecorder:
                     # 音频启动晚，延迟视频（视频需要提前）
                     cmd = [
                         "ffmpeg", "-y",
-                        "-v", "info",
-                        "-i", self._temp_audio,  # 输入0: 音频
-                        "-itsoffset", str(time_offset), "-i", temp_video2,  # 输入1: 视频（延迟）
-                        "-map", "0:a", "-map", "1:v",  # 映射音频和视频
-                        # 视频编码参数（确保兼容性）
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",  # 确保兼容性（大多数播放器支持）
-                        "-preset", "medium",
-                        "-crf", str(self.video_quality),  # 使用配置的质量值
-                        "-profile:v", "high",  # 使用 high profile 提高兼容性
-                        "-level", "4.0",  # H.264 level
-                        "-movflags", "+faststart",  # 将元数据移到文件开头，提高流式播放兼容性
-                        # 音频编码参数
-                        "-c:a", "aac",
-                        "-b:a", "192k",
-                        "-ac", "2",
-                        "-ar", "44100",  # 采样率
-                        "-channel_layout", "stereo",
-                        # 同步选项
-                        "-async", "1",
-                        "-vsync", "cfr",
-                        "-shortest",
-                        self._actual_save_path
-                    ]
-                    self.logger.info(f"Applying video delay compensation: {time_offset*1000:.1f}ms")
+    cmd = [
+        "nice", "-n", "19",  # Lower priority
+        "ffmpeg", "-y",
+        "-v", "info",
+        "-i", self._temp_audio,  # 输入0: 音频
+        "-itsoffset", str(time_offset), "-i", temp_video2,  # 输入1: 视频（延迟）
+        "-map", "0:a", "-map", "1:v",  # 映射音频和视频
+        # 视频编码参数（确保兼容性）
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",  # 确保兼容性（大多数播放器支持）
+        "-preset", "fast", # 使用 fast 平衡速度和压缩率
+        "-crf", str(self.video_quality),  # 使用配置的质量值
+        "-profile:v", "high",  # 使用 high profile 保持画质
+        "-level", "4.0",  # H.264 level
+        "-movflags", "+faststart",  # 将元数据移到文件开头，提高流式播放兼容性
+        # 音频编码参数
+        "-c:a", "aac",
+        "-b:a", "192k",  # 恢复高音质
+        "-ac", "2",
+        "-ar", "44100",  # 采样率
+        "-channel_layout", "stereo",
+        # 同步选项
+                if abs(time_offset) > 0.01:
+                    if time_offset > 0:
+                        # 视频启动早，延迟视频
+                        cmd = [
+                            "nice", "-n", "19",
+                            "ffmpeg", "-y",
+                            "-v", "info",
+                            "-i", self._temp_audio,
+                            "-itsoffset", str(time_offset), "-i", temp_video2,
+                            "-map", "0:a", "-map", "1:v",
+                            "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p",
+                            "-preset", "fast",
+                            "-crf", str(self.video_quality),
+                            "-profile:v", "high",
+                            "-level", "4.0",
+                            "-movflags", "+faststart",
+                            "-c:a", "aac",
+                            "-b:a", "192k",
+                            "-ac", "2",
+                            "-ar", "44100",
+                            "-channel_layout", "stereo",
+                            "-async", "1",
+                            "-vsync", "cfr",
+                            "-shortest",
+                            self._actual_save_path
+                        ]
+                        self.logger.info(f"Applying video delay compensation: {time_offset*1000:.1f}ms")
+                    else:
+                        # 视频启动晚，延迟音频
+                        cmd = [
+                            "nice", "-n", "19",
+                            "ffmpeg", "-y",
+                            "-itsoffset", str(-time_offset), "-i", self._temp_audio,
+                            "-i", temp_video2,
+                            "-map", "0:a", "-map", "1:v",
+                            "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p",
+                            "-preset", "fast",
+                            "-crf", str(self.video_quality),
+                            "-profile:v", "high",
+                            "-level", "4.0",
+                            "-movflags", "+faststart",
+                            "-c:a", "aac",
+                            "-b:a", "192k",
+                            "-ac", "2",
+                            "-ar", "44100",
+                            "-channel_layout", "stereo",
+                            "-async", "1",
+                            "-vsync", "cfr",
+                            "-shortest",
+                            self._actual_save_path
+                        ]
+                        self.logger.info(f"Applying audio delay compensation: {-time_offset*1000:.1f}ms")
                 else:
-                    # 视频启动晚，延迟音频（音频需要提前）
+                    # 直接合并
                     cmd = [
+                        "nice", "-n", "19",
                         "ffmpeg", "-y",
-                        "-itsoffset", str(-time_offset), "-i", self._temp_audio,  # 输入0: 音频（延迟）
-                        "-i", temp_video2,  # 输入1: 视频
-                        "-map", "0:a", "-map", "1:v",  # 映射音频和视频
-                        # 视频编码参数（确保兼容性）
+                        "-i", self._temp_audio,
+                        "-i", temp_video2,
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
-                        "-preset", "medium",
-                        "-crf", str(self.video_quality),  # 使用配置的质量值
+                        "-preset", "fast",
+                        "-crf", str(self.video_quality),
                         "-profile:v", "high",
                         "-level", "4.0",
                         "-movflags", "+faststart",
-                        # 音频编码参数
                         "-c:a", "aac",
                         "-b:a", "192k",
                         "-ac", "2",
                         "-ar", "44100",
                         "-channel_layout", "stereo",
-                        # 同步选项
                         "-async", "1",
                         "-vsync", "cfr",
                         "-shortest",
                         self._actual_save_path
                     ]
-                    self.logger.info(f"Applying audio delay compensation: {-time_offset*1000:.1f}ms")
-            else:
-                # 时间差很小，直接合并
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", self._temp_audio,
-                    "-i", temp_video2,
-                    # 视频编码参数（确保兼容性）
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",  # 确保兼容性（大多数播放器支持）
-                    "-preset", "medium",
-                    "-crf", str(self.video_quality),  # 使用配置的质量值
-                    "-profile:v", "high",  # 使用 high profile 提高兼容性
-                    "-level", "4.0",  # H.264 level
-                    "-movflags", "+faststart",  # 将元数据移到文件开头，提高流式播放兼容性
-                    # 音频编码参数
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ac", "2",
-                    "-ar", "44100",  # 采样率
-                    "-channel_layout", "stereo",
-                    # 同步选项
-                    "-async", "1",
-                    "-vsync", "cfr",
-                    "-shortest",
-                    self._actual_save_path
-                ]
             self.logger.info(f"Running ffmpeg merge cmd: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True)
             
