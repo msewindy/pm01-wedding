@@ -44,7 +44,7 @@ wedding_fsm_node:
     interview_silence_threshold: 2.5    # 判定用户回答结束的静音持续时间 (秒)
     interview_ending_duration: 2.0      # 结束语阶段持续时间 (秒)
     interview_done_duration: 1.0        # 完成后的缓冲时间 (秒)
-    interview_voice_threshold: 0.02     # 声音能量阈值，超过此值视为有人说话 (0-1)
+    interview_voice_threshold: 0.08     # 声音能量阈值，超过此值视为有人说话 (0-1)
     interview_mic_gain: 2.0             # 软件数字增益 (默认 2.0 倍)
     interview_auto_init_alsa: true      # 是否自动初始化 ALSA 硬件 mixer 设置
     
