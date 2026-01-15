@@ -602,6 +602,65 @@ class InterviewRecorder:
         
         # 同步启动事件（确保视频和音频同时开始）
         self._start_event = threading.Event()
+
+    def _detect_video_encoder(self):
+        """检测可用的最佳视频编码器及其参数"""
+        try:
+            cmd = ["ffmpeg", "-encoders"]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            output = result.stdout
+            
+            # 优先级 1: Jetson NVMPI (最高效)
+            if "h264_nvmpi" in output:
+                return {
+                    "name": "h264_nvmpi",
+                    "flags": ["-c:v", "h264_nvmpi", "-b:v", "6M"] 
+                }
+            
+            # 优先级 2: Jetson/Linux V4L2 Hardware
+            if "h264_v4l2m2m" in output:
+                return {
+                    "name": "h264_v4l2m2m",
+                    "flags": ["-c:v", "h264_v4l2m2m", "-b:v", "6M", "-pix_fmt", "yuv420p"]
+                }
+                
+            # 优先级 3: Desktop NVIDIA NVENC
+            if "h264_nvenc" in output:
+                return {
+                    "name": "h264_nvenc",
+                    "flags": [
+                        "-c:v", "h264_nvenc", 
+                        "-preset", "p4", 
+                        "-rc", "vbr", 
+                        "-cq", str(self.video_quality),
+                        "-pix_fmt", "yuv420p"
+                    ]
+                }
+                
+            # 优先级 4: Raspberry Pi
+            if "h264_omx" in output:
+                return {
+                    "name": "h264_omx",
+                    "flags": ["-c:v", "h264_omx", "-b:v", "4M"]
+                }
+
+            # 默认: 软件编码 libx264 (兼容性最好，但吃CPU)
+            return {
+                "name": "libx264",
+                "flags": [
+                    "-c:v", "libx264", 
+                    "-preset", "fast", 
+                    "-crf", str(self.video_quality),
+                    "-profile:v", "high",
+                    "-pix_fmt", "yuv420p"
+                ]
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to detect encoder: {e}, falling back to libx264")
+            return {
+                "name": "libx264",
+                "flags": ["-c:v", "libx264", "-preset", "fast", "-crf", str(self.video_quality)]
+            }
     
     def start(self) -> bool:
         """
