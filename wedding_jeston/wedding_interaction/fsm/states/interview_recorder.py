@@ -563,20 +563,28 @@ class InterviewRecorder:
         """
         self.save_path = save_path
         self.logger = logger or logging.getLogger("InterviewRecorder")
+        self.logger = logger or logging.getLogger(__name__)
         self.video_size = video_size
         self.video_fps = video_fps
         self.audio_sample_rate = audio_sample_rate
         self.camera_index = camera_index
         self.frame_callback = frame_callback
-        self.video_quality = video_quality  # CRF 值，用于 ffmpeg 编码
+        self.video_quality = video_quality
         self.audio_gain = audio_gain
         self.audio_device_index = audio_device_index
+        self.logger = logger or logging.getLogger(__name__)
+        
+        # 自动检测最佳编码器
+        self._encoder_config = self._detect_video_encoder()
+        self.logger.info(f"Selected video encoder: {self._encoder_config['name']}")
+
+        self._stop_event = threading.Event()
+        self._video_thread = None
         
         # 录制状态
         self._is_recording = False
         self._video_recorder: Optional[VideoRecorder] = None
         self._audio_recorder: Optional[AudioRecorder] = None
-        self._video_thread: Optional[threading.Thread] = None
         self._audio_thread: Optional[threading.Thread] = None
         
         # 录制参数
@@ -982,12 +990,7 @@ class InterviewRecorder:
                         "-i", self._temp_audio,
                         "-itsoffset", str(time_offset), "-i", temp_video2,
                         "-map", "0:a", "-map", "1:v",
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "fast",
-                        "-crf", str(self.video_quality),
-                        "-profile:v", "high",
-                        "-level", "4.0",
+                    ] + self._encoder_config['flags'] + [
                         "-movflags", "+faststart",
                         "-c:a", "aac",
                         "-b:a", "192k",
@@ -1008,12 +1011,7 @@ class InterviewRecorder:
                         "-itsoffset", str(-time_offset), "-i", self._temp_audio,
                         "-i", temp_video2,
                         "-map", "0:a", "-map", "1:v",
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "fast",
-                        "-crf", str(self.video_quality),
-                        "-profile:v", "high",
-                        "-level", "4.0",
+                    ] + self._encoder_config['flags'] + [
                         "-movflags", "+faststart",
                         "-c:a", "aac",
                         "-b:a", "192k",
@@ -1033,12 +1031,7 @@ class InterviewRecorder:
                     "ffmpeg", "-y",
                     "-i", self._temp_audio,
                     "-i", temp_video2,
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    "-preset", "fast",
-                    "-crf", str(self.video_quality),
-                    "-profile:v", "high",
-                    "-level", "4.0",
+                ] + self._encoder_config['flags'] + [
                     "-movflags", "+faststart",
                     "-c:a", "aac",
                     "-b:a", "192k",
