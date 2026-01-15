@@ -87,5 +87,10 @@ ACTION_PACKS = {
         "pose": "neutral",
         "motion_strategy": None, # 停止动态
         "speech_group": []
+    },
+    "neutral": {
+        "pose": "neutral",
+        "motion_strategy": "stop",
+        "speech_group": []
     }
 }

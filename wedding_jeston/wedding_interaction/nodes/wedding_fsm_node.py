@@ -511,6 +511,21 @@ class WeddingFSMNode(Node):
     
     def _on_image(self, msg: Image) -> None:
         """处理相机图像（用于录制等功能）"""
+        
+        # --- FPS Debug ---
+        if not hasattr(self, '_img_count'): 
+            self._img_count = 0
+            self._last_img_time = self.get_clock().now().nanoseconds / 1e9
+            
+        self._img_count += 1
+        now = self.get_clock().now().nanoseconds / 1e9
+        if now - self._last_img_time >= 5.0:
+            fps = self._img_count / (now - self._last_img_time)
+            self.get_logger().info(f"[Low-Level FPS] Received RGB frames: {fps:.1f} Hz (Resolution: {msg.width}x{msg.height})")
+            self._img_count = 0
+            self._last_img_time = now
+        # -----------------
+        
         if not CV_AVAILABLE:
             return
         

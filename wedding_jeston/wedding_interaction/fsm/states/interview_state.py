@@ -90,7 +90,7 @@ class InterviewState(WeddingState):
         self.has_spoken = False
         self.ending_duration = config.get('interview_ending_duration', 2.0)
         self.done_duration = config.get('interview_done_duration', 1.0)
-        self._voice_threshold = config.get('interview_voice_threshold', 0.02)
+        self._voice_threshold = config.get('interview_voice_threshold', 0.08)
         
         # 麦克风增益配置
         self.mic_gain = config.get('interview_mic_gain', 2.0)
@@ -127,8 +127,8 @@ class InterviewState(WeddingState):
     def _noise_callback(self, msg: Float32):
         self.current_ambient_noise = msg.data
         # Adaptive threshold: 1.5x noise + margin
-        # Clamp to [0.02, 0.15]
-        new_thresh = max(0.02, min(0.15, self.current_ambient_noise * 1.5 + 0.01))
+        # Clamp to [0.05, 0.15] (Increased min from 0.02 to 0.05 to avoid false trigger)
+        new_thresh = max(0.05, min(0.15, self.current_ambient_noise * 1.5 + 0.01))
         
         # Log only on significant change to avoid spam
         if abs(new_thresh - self._voice_threshold) > 0.005:
@@ -384,7 +384,10 @@ class InterviewState(WeddingState):
     def _stop_recording(self) -> None:
         if self._recorder:
             saved_path = self._recorder.stop()
-            if saved_path and os.path.exists(saved_path):
+            
+            if saved_path == "Async_Processing":
+                self.log("Recording stopping in background...")
+            elif saved_path and os.path.exists(saved_path):
                  file_size = os.path.getsize(saved_path)
                  if file_size == 0:
                      try:

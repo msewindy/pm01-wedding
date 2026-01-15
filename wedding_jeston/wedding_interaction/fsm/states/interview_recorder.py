@@ -32,6 +32,51 @@ except ImportError:
     PYAUDIO_AVAILABLE = False
 
 from ...utils.audio_utils import find_audio_device, get_alsa_card_index_from_info
+import queue
+
+# ========== Global FFMPEG Worker ==========
+class FFMPEGProcessor:
+    """
+    Global background worker for FFMPEG tasks to prevent CPU overload
+    from multiple concurrent conversions.
+    """
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __init__(self):
+        self.job_queue = queue.Queue()
+        self.running = True
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name="FFMPEG_Worker")
+        self.worker_thread.start()
+        self.logger = logging.getLogger("FFMPEGProcessor")
+        
+    @classmethod
+    def get_instance(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = cls()
+        return cls._instance
+        
+    def submit_job(self, func, *args, **kwargs):
+        """Submit a job to the queue"""
+        self.job_queue.put((func, args, kwargs))
+        self.logger.info(f"Job submitted. Queue size: {self.job_queue.qsize()}")
+        
+    def _worker_loop(self):
+        while self.running:
+            try:
+                func, args, kwargs = self.job_queue.get(timeout=1.0)
+                try:
+                    func(*args, **kwargs)
+                except Exception as e:
+                    self.logger.error(f"Job execution failed: {e}")
+                finally:
+                    self.job_queue.task_done()
+            except queue.Empty:
+                continue
+                
+# Initialize global processor
+ffmpeg_processor = FFMPEGProcessor.get_instance()
 
 
 # ========== ALSA Error Suppression ==========
@@ -649,6 +694,17 @@ class InterviewRecorder:
             self.logger.error(f"Failed to start recording: {e}")
             self._cleanup()
             return False
+
+    def _cleanup(self, exclude_temps=False):
+        """清理资源"""
+        self._is_recording = False
+        self._video_recorder = None
+        self._audio_recorder = None
+        
+        # 如果不是正在异步处理，清理临时路径
+        if not exclude_temps:
+            self._temp_video = None
+            self._temp_audio = None
     
     def write_frame(self, frame=None, audio_chunk=None) -> bool:
         """
@@ -700,40 +756,94 @@ class InterviewRecorder:
             self._is_recording = False
             
             # 停止视频录制
+            # 停止视频录制
+            # 提取资源引用以传递给后台线程
+            video_out_ref = None
+            video_cap_ref = None
+            saved_frames_count = 0
+            
             if self._video_recorder:
                 self._video_recorder.stop()
                 if self._video_thread:
                     self._video_thread.join(timeout=2.0)
-            
-            # 停止音频录制
-            if self._audio_recorder:
-                self._audio_recorder.stop()
-                if self._audio_thread:
-                    self._audio_thread.join(timeout=3.0) # 增加超时时间
-                    
-                    if self._audio_thread.is_alive():
-                        self.logger.error("Audio thread did not exit in time, skipping save to avoid corruption")
-                    else:
-                        # 线程结束后保存文件 (此时流已关闭，数据完整)
-                        self._audio_recorder.save_file()
+                # 获取底层 CV2 对象引用，以便在后台线程 release
+                video_out_ref = self._video_recorder.video_out
+                video_cap_ref = self._video_recorder.video_cap
+                saved_frames_count = self._video_recorder.frame_counts
                 
-                # 线程结束后，安全释放 PyAudio 资源
-                self._audio_recorder.release()
+                # 防止 VideoRecorder 析构时重复 release (虽然 Python 不一定会析构)
+                self._video_recorder.video_out = None
+                self._video_recorder.video_cap = None
             
-            # 等待线程结束
-            while threading.active_count() > 1:
-                time.sleep(0.1)
+            # 停止音频录制 (仅标记 stop，实际 join/save 在 finalize 中做)
+            # 提取引用
+            audio_recorder_ref = self._audio_recorder
+            audio_thread_ref = self._audio_thread
             
-            # 合并音视频
-            saved_path = self._merge_audio_video(elapsed)
+            # 等待音频线程 (非阻塞检查，因为后面有 join)
+            # while threading.active_count() > 1: # 不要阻塞主线程
+            #    time.sleep(0.1)
+            
+            # 合并音视频 (Async via Queue)
+            # 使用全局队列来串行处理 FFMPEG 任务，避免并发导致 CPU 过载
+            
+            # 提交任务到队列
+            ffmpeg_processor.submit_job(
+                self._finalize_recording_task,
+                elapsed, saved_frames_count, video_out_ref, video_cap_ref, audio_recorder_ref, audio_thread_ref
+            )
+            
+            # 清理句柄，但保留临时文件引用供 Worker 使用
+            # 注意: 这里不能把 self._temp_video 设为 None，因为 Worker 需要用到它
+            # 但 _cleanup 默认会清理 worker 只需要路径字符串，或者是已经复制过去的值?
+            # _finalize_recording_task 使用的是 self 实例的方法吗?
+            # 下面的 _finalize_recording_task 是实例方法，它访问 self._temp_video 等成员。
+            # 这意味着 self 不能被销毁。
+            # 但 InterviewState 会把 recorder 设为 None。由于闭包/Job引用，Instance 会保持存活直到 Job 完成。
+            
+            self._cleanup(exclude_temps=True) 
+            return "Async_Processing"
+            
+        except Exception as e:
+            self.logger.error(f"Failed to stop recording: {e}")
+            self._cleanup()
+            return None
+
+    def _finalize_recording_task(self, elapsed_time, frames_count, video_out, video_cap, audio_rec, audio_thread):
+        """执行具体的资源释放和合并任务 (在 Worker 线程中运行)"""
+        try:
+            # 1. 确保视频资源释放
+            if video_out: video_out.release()
+            if video_cap: video_cap.release()
+            if CV_AVAILABLE: cv2.destroyAllWindows()
+            
+            # 2. 确保音频线程结束并保存
+            if audio_rec and audio_thread:
+                audio_rec.stop()
+                audio_thread.join(timeout=5.0)
+                if audio_rec.open: 
+                     audio_rec.open = False
+                audio_rec.save_file()
+                audio_rec.release()
+
+            # 3. 合并
+            saved_path = self._merge_audio_video(elapsed_time)
             
             if saved_path:
-                self.logger.info(f"Recording saved: {saved_path} (duration: {elapsed:.1f}s)")
-            else:
-                self.logger.error("Failed to merge audio and video")
+                self.logger.info("="*50)
+                self.logger.info(f" [RESULT] Interview Video Saved: {saved_path} (duration: {elapsed_time:.1f}s)")
+                self.logger.info("="*50)
             
-            self._cleanup()
-            return saved_path
+            # 4. 清理临时文件
+            if self._temp_video and os.path.exists(self._temp_video):
+               try: os.remove(self._temp_video) 
+               except: pass
+            if self._temp_audio and os.path.exists(self._temp_audio):
+               try: os.remove(self._temp_audio) 
+               except: pass
+               
+        except Exception as e:
+            self.logger.error(f"Async finalize task failed: {e}")
             
         except Exception as e:
             self.logger.error(f"Failed to stop recording: {e}")
@@ -751,8 +861,8 @@ class InterviewRecorder:
             合并后的文件路径，如果失败返回 None
         """
         # 检查临时文件是否存在
-        has_video = self._video_recorder and os.path.exists(self._temp_video)
-        has_audio = self._audio_recorder and os.path.exists(self._temp_audio)
+        has_video = self._temp_video and os.path.exists(self._temp_video)
+        has_audio = self._temp_audio and os.path.exists(self._temp_audio)
         
         # 记录临时文件信息
         if self._temp_video:
@@ -981,29 +1091,7 @@ class InterviewRecorder:
                 except Exception as e:
                     self.logger.warning(f"Failed to remove temp file {temp_file}: {e}")
     
-    def _cleanup(self) -> None:
-        """清理资源"""
-        self._is_recording = False
-        
-        # 清理录制器
-        if self._video_recorder:
-            try:
-                self._video_recorder.stop()
-            except:
-                pass
-            self._video_recorder = None
-        
-        if self._audio_recorder:
-            try:
-                self._audio_recorder.stop()
-            except:
-                pass
-            self._audio_recorder = None
-        
-        # 清理临时文件
-        self._cleanup_temp_files()
-        
-        self._start_time = 0.0
+
     
     @property
     def is_recording(self) -> bool:
