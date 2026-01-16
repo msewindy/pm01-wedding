@@ -35,29 +35,32 @@ POSES = {
     # ==================== 新增姿态 ====================
 
     # 双手胸前比心 (Heart Chest)
+    # 双手胸前比心 (Heart Chest)
     "heart_chest": {
-        13: -0.5,  # L_SHOULDER_PITCH (抬起)
-        14: 0.1,   # L_SHOULDER_ROLL (内收)
-        15: -0.5,   # L_SHOULDER_YAW (向内转)
-        16: -1.5,  # L_ELBOW_PITCH (弯曲 90度+)
+
+        13: -0.3,  # L_SHOULDER_PITCH (改为 -0.3，降低肘部高度)
+        14: 0.1,   # L_SHOULDER_ROLL
+        15: 0.5,   # L_SHOULDER_YAW
+        16: -2.2,  # L_ELBOW_PITCH (改为 -2.2，大幅收缩前臂贴近胸口)
         17: 0.0,
         
-        18: -0.5,  # R_SHOULDER_PITCH
+        18: -0.3,  # R_SHOULDER_PITCH
         19: -0.1,  # R_SHOULDER_ROLL
-        20: 0.5,  # R_SHOULDER_YAW
-        21: -1.5,  # R_ELBOW_PITCH
+        20: -0.5,  # R_SHOULDER_YAW
+        21: -2.2,  # R_ELBOW_PITCH
         22: 0.0
     },
 
     # 双手头顶比心 (Heart Head)
+    # 双手头顶比心 (Heart Head)
     "heart_head": {
-        13: -2.0,  # L_SHOULDER_PITCH (高举)
-        14: 0.8,   # L_SHOULDER_ROLL (张开后内扣)
+        13: -1.7,  # L_SHOULDER_PITCH (改为 -1.7，防止重心过分后移)
+        14: 0.8,   # L_SHOULDER_ROLL
         15: 0.0,
-        16: -2.0,  # L_ELBOW_PITCH (大弯曲)
+        16: -2.0,  # L_ELBOW_PITCH
         17: 0.0,
         
-        18: -2.0,  # R_SHOULDER_PITCH
+        18: -1.7,  # R_SHOULDER_PITCH
         19: -0.8,  # R_SHOULDER_ROLL
         20: 0.0,
         21: -2.0,  # R_ELBOW_PITCH
