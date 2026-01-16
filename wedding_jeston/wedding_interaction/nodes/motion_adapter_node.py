@@ -98,8 +98,8 @@ class MotionAdapterNode(Node):
         self.declare_parameter('motion_head_acc', 1.0) # prev 2.0
         self.declare_parameter('motion_waist_vel', 0.3) # prev 0.5
         self.declare_parameter('motion_waist_acc', 0.8) # prev 1.5
-        self.declare_parameter('motion_arm_vel', 0.6) # prev 0.8
-        self.declare_parameter('motion_arm_acc', 1.0) # prev 1.5
+        self.declare_parameter('motion_arm_vel', 0.3) # prev 0.6 (Slowed down for stability)
+        self.declare_parameter('motion_arm_acc', 0.5) # prev 1.0 (Smoother buildup)
         
         # 声明关节 PD 参数
         self.declare_parameter('pd_leg_kp', 60.0)
