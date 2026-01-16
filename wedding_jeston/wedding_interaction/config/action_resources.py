@@ -16,8 +16,18 @@ ACTION_PACKS = {
         "pose": "neutral",
         "motion_strategy": "sway_normal",
         "speech_group": [
-            "idle_random_1",
-            "idle_greeting"
+            "greeting_general_1",
+            "greeting_literary_1",
+            "greeting_literary_2",
+            "greeting_literary_3",
+            "greeting_warm_1",
+            "greeting_warm_2",
+            "greeting_warm_3",
+            "greeting_warm_4",
+            "greeting_humorous_1",
+            "greeting_humorous_2",
+            "greeting_humorous_3",
+            "greeting_humorous_4"
         ],
         "speech_config": {
             "mode": "periodic",
@@ -32,18 +42,27 @@ ACTION_PACKS = {
     "idle_observe": {
         "pose": "neutral",
         "motion_strategy": None,  # 无运动，保持静止
-        "speech_group": [],       # 不说话
-        "speech_config": None
+        "speech_group": ["idle_random_1"],       # 不说话
+        "speech_config": {
+            "mode": "once",
+            "delay": 0.2
+        }
     },
     
     "greeting": {
         "pose": "wave_start",
         "motion_strategy": "wave_greet",
         "speech_group": [
-            "greeting_hello", 
+            "greeting_hello",
             "greeting_nice",
             "greeting_bride",
-            "greeting_groom"
+            "greeting_groom",
+            "greeting_greeting",
+            "greeting_welcome",
+            "greeting_general_5",
+            "greeting_general_3",
+            "greeting_general_2",
+            "greeting_general_4"
         ],
         "speech_config": {
             "mode": "once",

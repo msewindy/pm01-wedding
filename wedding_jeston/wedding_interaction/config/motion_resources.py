@@ -25,40 +25,26 @@ POSES = {
     
     # 挥手准备 (右手 - J18-J22)
     "wave_start": {
-        18: -1.5, # R_SHOULDER_PITCH (高举)
+        18: -1.7, # R_SHOULDER_PITCH (高举)
         19: 0.0,  # R_SHOULDER_ROLL
         20: 0.0,  # R_SHOULDER_YAW
-        21: -0.5, # R_ELBOW_PITCH (微弯)
+        21: -0.6, # R_ELBOW_PITCH (微弯)
         22: 0.0   # R_ELBOW_YAW
     },
 
     # ==================== 新增姿态 ====================
-    # 欢迎 (Welcome) - 双臂张开
-    "welcome": {
-        13: 0.2,   # L_SHOULDER_PITCH (微抬)
-        14: 1.2,   # L_SHOULDER_ROLL (大张开)
-        15: 0.0,
-        16: -0.5,  # L_ELBOW_PITCH (微弯)
-        17: 0.0,
-        
-        18: 0.2,   # R_SHOULDER_PITCH
-        19: -1.2,  # R_SHOULDER_ROLL (大张开 - 负值)
-        20: 0.0,
-        21: -0.5,  # R_ELBOW_PITCH
-        22: 0.0
-    },
 
     # 双手胸前比心 (Heart Chest)
     "heart_chest": {
         13: -0.5,  # L_SHOULDER_PITCH (抬起)
-        14: 0.5,   # L_SHOULDER_ROLL (内收)
-        15: 0.5,   # L_SHOULDER_YAW (向内转)
+        14: 0.1,   # L_SHOULDER_ROLL (内收)
+        15: -0.5,   # L_SHOULDER_YAW (向内转)
         16: -1.5,  # L_ELBOW_PITCH (弯曲 90度+)
         17: 0.0,
         
         18: -0.5,  # R_SHOULDER_PITCH
-        19: -0.5,  # R_SHOULDER_ROLL
-        20: -0.5,  # R_SHOULDER_YAW
+        19: -0.1,  # R_SHOULDER_ROLL
+        20: 0.5,  # R_SHOULDER_YAW
         21: -1.5,  # R_ELBOW_PITCH
         22: 0.0
     },
@@ -124,13 +110,6 @@ MOTIONS = {
         "range": 0.8,      # 扫描范围 (比例 0~1)
         "function": "sine" # 正弦扫描
     },
-
-    # 快速摇头 (Fast Scan for "No")
-    "scan_fast": {
-        "type": "scan",
-        "period": 2.0,     # 快周期
-        "range": 0.3,      # 小范围
-    },
     
     # PID 跟随 (Track)
     # 这只是参数，具体的计算在 FSM 中进行
@@ -153,14 +132,4 @@ MOTIONS = {
         ]
     },
 
-    # 双手挥手 (Double Wave)
-    "wave_double": {
-        "type": "multi_sine",
-        "joints": [
-            {"id": 13, "amp": 0.3, "period": 1.5, "phase": 0.0}, # L_SHOULDER_PITCH
-            {"id": 18, "amp": 0.3, "period": 1.5, "phase": 0.0}, # R_SHOULDER_PITCH
-            {"id": 16, "amp": 0.2, "period": 1.5, "phase": 0.5}, # L_ELBOW
-            {"id": 21, "amp": 0.2, "period": 1.5, "phase": 0.5}, # R_ELBOW
-        ]
-    }
 }
