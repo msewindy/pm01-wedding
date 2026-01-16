@@ -355,6 +355,30 @@ class MotionAdapterNode(Node):
         self.target_head_offset = val * robot_config.LIMITS['HEAD_YAW']
         self.target_waist_offset = val * 0.3 * robot_config.LIMITS['WAIST_YAW'] # 腰部动少点
 
+    def _generate_multi_sine(self, t: float):
+        """生成多关节正弦波 (通用)"""
+        params = self._motion_params
+        joints_config = params.get('joints', [])
+        
+        offsets = {}
+        
+        for cfg in joints_config:
+            idx = cfg.get('id')
+            amp = cfg.get('amp', 0.1)
+            period = cfg.get('period', 1.0)
+            phase = cfg.get('phase', 0.0)
+            
+            w = 2 * math.pi / period
+            
+            # 使用 Ramp-up 防止突变
+            ramp_duration = 1.0
+            ramp_factor = min(1.0, t / ramp_duration)
+            
+            val = amp * math.sin(w * t + phase) * ramp_factor
+            offsets[idx] = val
+            
+        return offsets
+
     def _control_loop(self):
         if not self._initialized or not self._use_interface_protocol: return
         
@@ -365,6 +389,7 @@ class MotionAdapterNode(Node):
             # 1. 根据模式生成目标值
             wave_offset = 0.0
             wave_joint = -1
+            multi_sine_offsets = {}
             
             if self._motion_mode == "sway":
                 self._generate_sway(dt)
@@ -373,6 +398,11 @@ class MotionAdapterNode(Node):
                 # 挥手时保持头部不动或微动
                 self.target_head_offset = 0.0
                 self.target_waist_offset = 0.0
+            elif self._motion_mode == "multi_sine":
+                 multi_sine_offsets = self._generate_multi_sine(dt)
+                 # 可以在此模式下保持头部/腰部不动，或者允许它们如果被配置在 multi_sine 里的话
+                 # 目前 multi_sine 只针对 offsets 字典，我们在后面应用
+                 pass
             elif self._motion_mode == "scan":
                 self._generate_scan(dt)
             elif self._motion_mode == "track":
@@ -417,9 +447,14 @@ class MotionAdapterNode(Node):
             active_arm_joints = robot_config.JOINTS_ARM_LEFT + robot_config.JOINTS_ARM_RIGHT
             for idx in active_arm_joints:
                 base_angle = self.target_arm_angles.get(idx, 0.0)
-                # 叠加 Wave 效果
+                
+                # 叠加 Wave 效果 (Legacy)
                 if idx == wave_joint:
                     base_angle += wave_offset
+                
+                # 叠加 Multi-Sine 效果 (New)
+                if idx in multi_sine_offsets:
+                    base_angle += multi_sine_offsets[idx]
                 
                 self.current_arm_angles[idx] = self.arm_smoothers[idx].update(base_angle)
             

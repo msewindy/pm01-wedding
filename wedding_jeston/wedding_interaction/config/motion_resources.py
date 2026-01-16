@@ -30,13 +30,74 @@ POSES = {
         20: 0.0,  # R_SHOULDER_YAW
         21: -0.5, # R_ELBOW_PITCH (微弯)
         22: 0.0   # R_ELBOW_YAW
+    },
+
+    # ==================== 新增姿态 ====================
+    # 欢迎 (Welcome) - 双臂张开
+    "welcome": {
+        13: 0.2,   # L_SHOULDER_PITCH (微抬)
+        14: 1.2,   # L_SHOULDER_ROLL (大张开)
+        15: 0.0,
+        16: -0.5,  # L_ELBOW_PITCH (微弯)
+        17: 0.0,
+        
+        18: 0.2,   # R_SHOULDER_PITCH
+        19: -1.2,  # R_SHOULDER_ROLL (大张开 - 负值)
+        20: 0.0,
+        21: -0.5,  # R_ELBOW_PITCH
+        22: 0.0
+    },
+
+    # 双手胸前比心 (Heart Chest)
+    "heart_chest": {
+        13: -0.5,  # L_SHOULDER_PITCH (抬起)
+        14: 0.5,   # L_SHOULDER_ROLL (内收)
+        15: 0.5,   # L_SHOULDER_YAW (向内转)
+        16: -1.5,  # L_ELBOW_PITCH (弯曲 90度+)
+        17: 0.0,
+        
+        18: -0.5,  # R_SHOULDER_PITCH
+        19: -0.5,  # R_SHOULDER_ROLL
+        20: -0.5,  # R_SHOULDER_YAW
+        21: -1.5,  # R_ELBOW_PITCH
+        22: 0.0
+    },
+
+    # 双手头顶比心 (Heart Head)
+    "heart_head": {
+        13: -2.0,  # L_SHOULDER_PITCH (高举)
+        14: 0.8,   # L_SHOULDER_ROLL (张开后内扣)
+        15: 0.0,
+        16: -2.0,  # L_ELBOW_PITCH (大弯曲)
+        17: 0.0,
+        
+        18: -2.0,  # R_SHOULDER_PITCH
+        19: -0.8,  # R_SHOULDER_ROLL
+        20: 0.0,
+        21: -2.0,  # R_ELBOW_PITCH
+        22: 0.0
+    },
+
+    # 双手叉腰 (Akimbo)
+    "akimbo": {
+        13: -0.2,  # L_SHOULDER_PITCH
+        14: 0.8,   # L_SHOULDER_ROLL (张开)
+        15: 0.0,
+        16: -1.2,  # L_ELBOW_PITCH (手肘弯曲向外)
+        17: 0.0,
+        
+        18: -0.2,  # R_SHOULDER_PITCH
+        19: -0.8,  # R_SHOULDER_ROLL
+        20: 0.0,
+        21: -1.2,  # R_ELBOW_PITCH
+        22: 0.0
     }
 }
 
 
 # ==================== 动态策略参数 (Motion Params) ====================
 # 定义持续运动的参数
-# type: 策略类型 (sway, wave, scan, track)
+# type: 策略类型 (sway, wave, scan, track, multi_sine)
 
 MOTIONS = {
     # 待机摆动 (Sway)
@@ -48,7 +109,7 @@ MOTIONS = {
         "phase_diff": 0.5  # 相位差
     },
     
-    # 挥手 (Right Wave)
+    # 挥手 (Right Wave - Single Joint Legacy)
     "wave_greet": {
         "type": "wave",
         "period": 1.0,     # 挥手周期
@@ -63,6 +124,13 @@ MOTIONS = {
         "range": 0.8,      # 扫描范围 (比例 0~1)
         "function": "sine" # 正弦扫描
     },
+
+    # 快速摇头 (Fast Scan for "No")
+    "scan_fast": {
+        "type": "scan",
+        "period": 2.0,     # 快周期
+        "range": 0.3,      # 小范围
+    },
     
     # PID 跟随 (Track)
     # 这只是参数，具体的计算在 FSM 中进行
@@ -70,5 +138,29 @@ MOTIONS = {
         "type": "track",
         "smooth": 0.2,
         "dead_zone": 0.05
+    },
+
+    # ==================== 新增动态 (Multi-Sine) ====================
+    # 呼吸 (Breath) - 肩膀微动
+    "breath": {
+        "type": "multi_sine",
+        "joints": [
+            {"id": 13, "amp": 0.05, "period": 4.0, "phase": 0.0}, # L_PITCH
+            {"id": 18, "amp": 0.05, "period": 4.0, "phase": 0.0}, # R_PITCH
+            # 也可以加一点手臂张开 (Roll)
+            {"id": 14, "amp": 0.02, "period": 4.0, "phase": 0.5},
+            {"id": 19, "amp": -0.02, "period": 4.0, "phase": 0.5},
+        ]
+    },
+
+    # 双手挥手 (Double Wave)
+    "wave_double": {
+        "type": "multi_sine",
+        "joints": [
+            {"id": 13, "amp": 0.3, "period": 1.5, "phase": 0.0}, # L_SHOULDER_PITCH
+            {"id": 18, "amp": 0.3, "period": 1.5, "phase": 0.0}, # R_SHOULDER_PITCH
+            {"id": 16, "amp": 0.2, "period": 1.5, "phase": 0.5}, # L_ELBOW
+            {"id": 21, "amp": 0.2, "period": 1.5, "phase": 0.5}, # R_ELBOW
+        ]
     }
 }
