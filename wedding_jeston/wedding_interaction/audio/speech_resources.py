@@ -40,7 +40,7 @@ SPEECH_LIBRARY: Dict[str, str] = {
     
     # ==================== 采访 ====================
     "interview_start": "让我来采访一下！",
-    "interview_question_1": "请问你和新人是什么关系呀？",
+    "interview_question_relation": "请问你和新人是什么关系呀？",
     "interview_question_2": "有什么祝福想对新人说的吗？",
     "interview_question_3": "来分享一个你和新人的小故事吧！",
     "interview_thanks": "谢谢你的祝福！",

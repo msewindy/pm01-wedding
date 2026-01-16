@@ -10,6 +10,7 @@ INTERVIEW 状态（采访）
 """
 
 import os
+import random
 from typing import TYPE_CHECKING, Optional
 
 from ..enums import WeddingStateName, WeddingEvent
@@ -54,22 +55,31 @@ class InterviewState(WeddingState):
         # Load questions dynamically from SPEECH_LIBRARY
         from ...audio.speech_resources import SPEECH_LIBRARY
         
-        # Find all keys starting with 'interview_question_'
-        q_keys = [k for k in SPEECH_LIBRARY.keys() if k.startswith('interview_question_')]
-        # Sort by index suffix (e.g. '1', '2')
-        try:
-            q_keys.sort(key=lambda x: int(x.split('_')[-1]))
-        except ValueError:
-            # Fallback sort if naming convention fails
-            q_keys.sort()
+        self._questions = []
+        
+        # 1. Fixed First Question: Relationship
+        if 'interview_question_relation' in SPEECH_LIBRARY:
+            self._questions.append(('interview_question_relation', SPEECH_LIBRARY['interview_question_relation']))
+        else:
+            self.log("Error: 'interview_question_relation' not found in SPEECH_LIBRARY")
+            self._questions.append(('interview_question_1', "请问你和新人是什么关系呀？")) # Fallback key assumption
             
-        for k in q_keys:
-            self._questions.append(SPEECH_LIBRARY[k])
-            
+        # 2. Random Second Question
+        # Find all keys starting with 'interview_question_' EXCLUDING 'relation'
+        pool_keys = [k for k in SPEECH_LIBRARY.keys() 
+                     if k.startswith('interview_question_') and k != 'interview_question_relation']
+        
+        if pool_keys:
+            random_key = random.choice(pool_keys)
+            self._questions.append((random_key, SPEECH_LIBRARY[random_key]))
+            self.log(f"Selected random second question: {random_key}")
+        else:
+            self.log("Warning: No additional random questions found in pool!")
+
         if not self._questions:
-            self.log("Warning: No interview questions found in SPEECH_LIBRARY!")
+            self.log("Error: No interview questions could be loaded!")
             # Fallback
-            self._questions = ["(无问题配置)"]
+            self._questions = [('interview_question_1', "(无问题配置)")]
         
         # 时间参数（可从配置读取）
         config = self.fsm.data.config or {}
@@ -237,10 +247,13 @@ class InterviewState(WeddingState):
         phase_elapsed = self.fsm.get_current_time() - self.phase_start_time
         
         if self.phase == self.PHASE_START:
-            self.set_speech("interview_start")
-            self._enter_phase(self.PHASE_GREETING)
+            # Skip greeting phase, ask first question immediately
+            self.log("Starting interview: Skipping greeting, asking first question directly.")
+            self._enter_phase(self.PHASE_QUESTION)
+            self._ask_question()
             
         elif self.phase == self.PHASE_GREETING:
+            # (Deprecated phase, but kept for logic structure just in case)
             if phase_elapsed >= self.greeting_duration:
                 self._enter_phase(self.PHASE_QUESTION)
                 self._ask_question()
@@ -310,14 +323,15 @@ class InterviewState(WeddingState):
     
     def _ask_question(self) -> None:
         if self._question_index < len(self._questions):
-            question = self._questions[self._question_index]
-            speech_id = f"interview_question_{self._question_index + 1}"
-            self.set_speech(speech_id)
+            # Tuple: (speech_key, question_text)
+            speech_key, question_text = self._questions[self._question_index]
             
-            est_duration = 1.5 + len(question) * 0.25
+            self.set_speech(speech_key)
+            
+            est_duration = 1.5 + len(question_text) * 0.25
             self.question_duration = max(2.0, est_duration)
             
-            self.log(f"Asking question {self._question_index + 1}: {question}")
+            self.log(f"Asking question {self._question_index + 1} ({speech_key}): {question_text}")
             self._question_index += 1
         else:
             self._enter_phase(self.PHASE_ENDING)
